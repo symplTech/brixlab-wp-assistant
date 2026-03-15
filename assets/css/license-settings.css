@@ -1,0 +1,146 @@
+.wpb-license-wrap {
+    max-width: 600px;
+    margin: 40px auto;
+}
+
+.wpb-license-wrap h1 {
+    margin-bottom: 30px;
+}
+
+.wpb-license-card {
+    background: #fff;
+    border: 1px solid #c3c4c7;
+    border-radius: 4px;
+    padding: 30px;
+    box-shadow: 0 1px 1px rgba(0,0,0,.04);
+}
+
+.wpb-license-status {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 15px;
+    border-radius: 4px;
+    margin-bottom: 20px;
+    font-weight: 500;
+    font-size: 14px;
+}
+
+.wpb-license-status.active {
+    background: #d1fae5;
+    color: #065f46;
+}
+
+.wpb-license-status.inactive {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+.wpb-license-status .status-indicator {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+}
+
+.wpb-license-status.active .status-indicator {
+    background: #10b981;
+}
+
+.wpb-license-status.inactive .status-indicator {
+    background: #ef4444;
+}
+
+.wpb-license-info {
+    background: #f8f9fa;
+    border-radius: 4px;
+    padding: 15px;
+    margin-bottom: 20px;
+}
+
+.wpb-license-info p {
+    margin: 8px 0;
+    font-size: 13px;
+}
+
+.wpb-license-info p:first-child {
+    margin-top: 0;
+}
+
+.wpb-license-info p:last-child {
+    margin-bottom: 0;
+}
+
+.wpb-license-info strong {
+    color: #1e1e1e;
+}
+
+#wpb-license-key {
+    width: 100%;
+    padding: 10px 12px;
+    font-size: 14px;
+    font-family: monospace;
+    margin-top: 8px;
+}
+
+#wpb-activate-form p {
+    margin-bottom: 15px;
+}
+
+#wpb-activate-form label {
+    font-weight: 500;
+    font-size: 14px;
+}
+
+#wpb-license-message {
+    padding: 12px 15px;
+    border-radius: 4px;
+    margin-top: 20px;
+    font-size: 14px;
+}
+
+#wpb-license-message.success {
+    background: #d1fae5;
+    color: #065f46;
+    border: 1px solid #6ee7b7;
+}
+
+#wpb-license-message.error {
+    background: #fee2e2;
+    color: #991b1b;
+    border: 1px solid #fca5a5;
+}
+
+.wpb-license-card .description {
+    color: #646970;
+    font-size: 13px;
+    margin-top: 20px;
+}
+
+.wpb-license-card .description a {
+    color: #2271b1;
+    text-decoration: none;
+}
+
+.wpb-license-card .description a:hover {
+    color: #135e96;
+    text-decoration: underline;
+}
+
+.wpb-license-warning {
+    background: #fff3cd;
+    border: 1px solid #ffc107;
+    border-radius: 4px;
+    padding: 15px;
+    margin-bottom: 20px;
+    color: #856404;
+}
+
+.wpb-license-warning strong {
+    display: block;
+    margin-bottom: 5px;
+}
+
+.wpb-license-warning p {
+    margin: 0;
+    font-size: 13px;
+}
