@@ -6,8 +6,25 @@ defined('ABSPATH') || exit;
 /**
  * Singleton registry for AI assistant tools.
  *
- * Third-party plugins can register custom tools via the
- * 'brixlab_register_assistant_tools' hook.
+ * Lazy-initialized: the extension hook fires on the first call to
+ * get(), getAll(), or getToolDefinitions() — NOT at plugins_loaded.
+ * This ensures all plugins have had a chance to add_action() before
+ * the hook fires.
+ *
+ * Registration methods (pick one):
+ *
+ * 1. Global helper (simplest — no class needed):
+ *    brixlab_assistant_register_tool([ 'name' => ..., 'preview' => ..., 'execute' => ... ]);
+ *
+ * 2. Hook + class (full control):
+ *    add_action('brixlab_register_assistant_tools', function($registry) {
+ *        $registry->register(new MyCustomTool());
+ *    });
+ *
+ * 3. Hook + CallbackTool (inline, no class):
+ *    add_action('brixlab_register_assistant_tools', function($registry) {
+ *        $registry->register(new \BrixlabAssistant\Assistant\CallbackTool([...]));
+ *    });
  */
 class AssistantToolRegistry
 {

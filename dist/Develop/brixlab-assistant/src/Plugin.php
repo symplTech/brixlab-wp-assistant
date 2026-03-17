@@ -32,8 +32,10 @@ class Plugin
         $assistant = new AssistantService();
         $assistant->register();
 
-        // Tool registry: register built-in tools, then fire extension hook
-        AssistantToolRegistry::instance()->init();
+        // Tool registry: lazy-initialized on first use (when AJAX fires).
+        // This ensures all plugins have had a chance to hook into
+        // 'brixlab_register_assistant_tools' before the registry collects tools.
+        // No explicit init() call needed here.
 
         // Admin menu
         add_action('admin_menu', array($this, 'addAdminMenu'));
@@ -63,6 +65,16 @@ class Plugin
             'manage_options',
             'brixlab-assistant',
             array(Settings::instance(), 'renderSettingsPage')
+        );
+
+        // Tools sub-page
+        add_submenu_page(
+            'brixlab-assistant',
+            __('Tools', 'brixlab-assistant'),
+            __('Tools', 'brixlab-assistant'),
+            'manage_options',
+            'brixlab-assistant-tools',
+            array($this, 'renderToolsPage')
         );
 
         // License sub-page
@@ -119,6 +131,20 @@ class Plugin
         } else {
             echo '<div class="wrap"><h1>' . esc_html__('License', 'brixlab-assistant') . '</h1>';
             echo '<p>' . esc_html__('License settings view not found.', 'brixlab-assistant') . '</p></div>';
+        }
+    }
+
+    /**
+     * Render the tools overview page.
+     */
+    public function renderToolsPage()
+    {
+        $view = BRIXLAB_ASSISTANT_DIR . 'views/tools.php';
+        if (file_exists($view)) {
+            require $view;
+        } else {
+            echo '<div class="wrap"><h1>' . esc_html__('Tools', 'brixlab-assistant') . '</h1>';
+            echo '<p>' . esc_html__('Tools view not found.', 'brixlab-assistant') . '</p></div>';
         }
     }
 }

@@ -39,6 +39,7 @@ require_once BRIXLAB_ASSISTANT_DIR . 'src/Services/AssistantService.php';
 
 // Assistant tool system
 require_once BRIXLAB_ASSISTANT_DIR . 'src/Assistant/AbstractAssistantTool.php';
+require_once BRIXLAB_ASSISTANT_DIR . 'src/Assistant/CallbackTool.php';
 require_once BRIXLAB_ASSISTANT_DIR . 'src/Assistant/AssistantToolRegistry.php';
 require_once BRIXLAB_ASSISTANT_DIR . 'src/Assistant/Tools/UpdateOptionTool.php';
 require_once BRIXLAB_ASSISTANT_DIR . 'src/Assistant/Tools/ManagePluginTool.php';
@@ -60,6 +61,48 @@ function brixlab_assistant_sanitize_deep( $value ) {
         return sanitize_text_field( $value );
     }
     return $value;
+}
+
+/**
+ * Register a tool with the AI Assistant using a simple array config.
+ *
+ * This is the easiest way for third-party plugins to add tools without
+ * extending AbstractAssistantTool. Call this at any time — the tool will
+ * be picked up when the registry initializes (on first AJAX request).
+ *
+ * Example:
+ *
+ *   brixlab_assistant_register_tool([
+ *       'name'        => 'send_notification',
+ *       'description' => 'Send an email notification to the site admin.',
+ *       'parameters'  => [
+ *           'type'       => 'object',
+ *           'properties' => [
+ *               'subject' => ['type' => 'string', 'description' => 'Email subject.'],
+ *               'message' => ['type' => 'string', 'description' => 'Email body.'],
+ *           ],
+ *           'required' => ['subject', 'message'],
+ *       ],
+ *       'preview' => function(array $params) {
+ *           return [
+ *               'title'   => 'Send notification',
+ *               'changes' => [
+ *                   ['type' => 'create', 'label' => 'Email', 'to' => $params['subject']],
+ *               ],
+ *           ];
+ *       },
+ *       'execute' => function(array $params) {
+ *           wp_mail(get_option('admin_email'), $params['subject'], $params['message']);
+ *           return ['success' => true, 'message' => 'Notification sent.'];
+ *       },
+ *   ]);
+ *
+ * @param array $config Tool configuration (name, description, parameters, preview, execute).
+ */
+function brixlab_assistant_register_tool( array $config ) {
+    add_action('brixlab_register_assistant_tools', function( $registry ) use ( $config ) {
+        $registry->register( new \BrixlabAssistant\Assistant\CallbackTool( $config ) );
+    });
 }
 
 // Bootstrap

@@ -52,22 +52,33 @@ class ManagePostTool extends AbstractAssistantTool
         ];
     }
 
+    /**
+     * Get the singular label for a post type (e.g. "Page", "Post").
+     */
+    private function getPostTypeLabel(string $post_type): string
+    {
+        $obj = get_post_type_object($post_type);
+        return $obj ? $obj->labels->singular_name : ucfirst($post_type);
+    }
+
     public function preview(array $params): array
     {
         $action = $params['action'];
 
         if ($action === 'create') {
             $title = isset($params['title']) ? $params['title'] : 'Untitled';
+            $type_slug = isset($params['post_type']) ? $params['post_type'] : 'post';
+            $label = $this->getPostTypeLabel($type_slug);
+
             return [
-                'title'   => 'Create post: ' . $title,
-                'changes' => [['type' => 'create', 'label' => 'Post', 'from' => '', 'to' => $title]],
+                'title'   => 'Create ' . strtolower($label) . ': ' . $title,
+                'changes' => [['type' => 'create', 'label' => $label, 'from' => '', 'to' => $title]],
             ];
         }
 
         if ($action === 'update') {
             $post_id = isset($params['post_id']) ? (int) $params['post_id'] : 0;
             $post    = get_post($post_id);
-            $changes = [];
 
             if (!$post) {
                 return [
@@ -75,6 +86,9 @@ class ManagePostTool extends AbstractAssistantTool
                     'changes' => [['type' => 'error', 'label' => 'Post not found', 'from' => '', 'to' => '']],
                 ];
             }
+
+            $label = $this->getPostTypeLabel($post->post_type);
+            $changes = [];
 
             if (isset($params['title'])) {
                 $changes[] = ['type' => 'update', 'label' => 'Title', 'from' => $post->post_title, 'to' => $params['title']];
@@ -86,17 +100,18 @@ class ManagePostTool extends AbstractAssistantTool
                 $changes[] = ['type' => 'update', 'label' => 'Status', 'from' => $post->post_status, 'to' => $params['status']];
             }
 
-            return ['title' => 'Update post: ' . $post->post_title, 'changes' => $changes];
+            return ['title' => 'Update ' . strtolower($label) . ': ' . $post->post_title, 'changes' => $changes];
         }
 
         // trash
         $post_id = isset($params['post_id']) ? (int) $params['post_id'] : 0;
         $post    = get_post($post_id);
         $title   = $post ? $post->post_title : '#' . $post_id;
+        $label   = $post ? $this->getPostTypeLabel($post->post_type) : 'Post';
 
         return [
-            'title'   => 'Trash post: ' . $title,
-            'changes' => [['type' => 'delete', 'label' => 'Post', 'from' => $title, 'to' => 'trash']],
+            'title'   => 'Trash ' . strtolower($label) . ': ' . $title,
+            'changes' => [['type' => 'delete', 'label' => $label, 'from' => $title, 'to' => 'trash']],
         ];
     }
 
@@ -112,16 +127,17 @@ class ManagePostTool extends AbstractAssistantTool
                 'post_type'    => isset($params['post_type']) ? $params['post_type'] : 'post',
             ];
 
+            $label = $this->getPostTypeLabel($post_data['post_type']);
             $post_id = wp_insert_post($post_data, true);
 
             if (is_wp_error($post_id)) {
-                return ['success' => false, 'message' => 'Failed to create post: ' . $post_id->get_error_message()];
+                return ['success' => false, 'message' => 'Failed to create ' . strtolower($label) . ': ' . $post_id->get_error_message()];
             }
 
             return [
                 'success' => true,
-                'message' => 'Post "' . $post_data['post_title'] . '" created successfully (ID: ' . $post_id . ').',
-                'link'    => ['url' => admin_url('post.php?post=' . $post_id . '&action=edit'), 'label' => 'Edit ' . $post_data['post_type']],
+                'message' => $label . ' "' . $post_data['post_title'] . '" created successfully (ID: ' . $post_id . ').',
+                'link'    => ['url' => admin_url('post.php?post=' . $post_id . '&action=edit'), 'label' => 'Edit ' . strtolower($label)],
             ];
         }
 
