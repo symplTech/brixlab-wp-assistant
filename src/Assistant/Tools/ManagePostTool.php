@@ -14,7 +14,7 @@ class ManagePostTool extends AbstractAssistantTool
 
     public function getDescription(): string
     {
-        return 'Create, update, or trash a WordPress post or page. Supports setting title, content, status, and post type.';
+        return 'Create, update, or trash a WordPress post or page. Supports setting title, content, status, and post type. For update/trash, you can provide either post_id OR post_name (title) to find the post — an ID is not required.';
     }
 
     public function getParameterSchema(): array
@@ -29,11 +29,15 @@ class ManagePostTool extends AbstractAssistantTool
                 ],
                 'post_id' => [
                     'type'        => 'integer',
-                    'description' => 'The post ID (required for update and trash).',
+                    'description' => 'The post ID. Optional — if not provided, the post will be looked up by post_name.',
+                ],
+                'post_name' => [
+                    'type'        => 'string',
+                    'description' => 'The title of the post/page to find. Used when post_id is not provided. Searches published posts first, then drafts.',
                 ],
                 'title' => [
                     'type'        => 'string',
-                    'description' => 'The post title.',
+                    'description' => 'The post title (for create, or the new title for update).',
                 ],
                 'content' => [
                     'type'        => 'string',
@@ -45,20 +49,43 @@ class ManagePostTool extends AbstractAssistantTool
                 ],
                 'post_type' => [
                     'type'        => 'string',
-                    'description' => 'Post type (default: post).',
+                    'description' => 'Post type (default: post). Use "page" for pages.',
                 ],
             ],
             'required' => ['action'],
         ];
     }
 
-    /**
-     * Get the singular label for a post type (e.g. "Page", "Post").
-     */
     private function getPostTypeLabel(string $post_type): string
     {
         $obj = get_post_type_object($post_type);
         return $obj ? $obj->labels->singular_name : ucfirst($post_type);
+    }
+
+    /**
+     * Resolve a post by ID or name. Returns the post or null.
+     */
+    private function resolvePost(array $params): ?\WP_Post
+    {
+        if (!empty($params['post_id'])) {
+            return get_post((int) $params['post_id']);
+        }
+
+        if (!empty($params['post_name'])) {
+            $post_type = isset($params['post_type']) ? $params['post_type'] : 'any';
+            $found = get_posts([
+                'title'          => $params['post_name'],
+                'post_type'      => $post_type,
+                'post_status'    => ['publish', 'draft', 'pending', 'private'],
+                'posts_per_page' => 1,
+                'no_found_rows'  => true,
+                'orderby'        => 'post_status',
+                'order'          => 'ASC',
+            ]);
+            return !empty($found) ? $found[0] : null;
+        }
+
+        return null;
     }
 
     public function preview(array $params): array
@@ -76,14 +103,14 @@ class ManagePostTool extends AbstractAssistantTool
             ];
         }
 
-        if ($action === 'update') {
-            $post_id = isset($params['post_id']) ? (int) $params['post_id'] : 0;
-            $post    = get_post($post_id);
+        $post = $this->resolvePost($params);
 
+        if ($action === 'update') {
             if (!$post) {
+                $identifier = !empty($params['post_name']) ? '"' . $params['post_name'] . '"' : '#' . ($params['post_id'] ?? 0);
                 return [
-                    'title'   => 'Update post #' . $post_id,
-                    'changes' => [['type' => 'error', 'label' => 'Post not found', 'from' => '', 'to' => '']],
+                    'title'   => 'Update post ' . $identifier,
+                    'changes' => [['type' => 'error', 'label' => 'Not found', 'from' => $identifier, 'to' => 'Could not find this post']],
                 ];
             }
 
@@ -104,10 +131,8 @@ class ManagePostTool extends AbstractAssistantTool
         }
 
         // trash
-        $post_id = isset($params['post_id']) ? (int) $params['post_id'] : 0;
-        $post    = get_post($post_id);
-        $title   = $post ? $post->post_title : '#' . $post_id;
-        $label   = $post ? $this->getPostTypeLabel($post->post_type) : 'Post';
+        $title = $post ? $post->post_title : (!empty($params['post_name']) ? $params['post_name'] : '#' . ($params['post_id'] ?? 0));
+        $label = $post ? $this->getPostTypeLabel($post->post_type) : 'Post';
 
         return [
             'title'   => 'Trash ' . strtolower($label) . ': ' . $title,
@@ -141,14 +166,16 @@ class ManagePostTool extends AbstractAssistantTool
             ];
         }
 
-        if ($action === 'update') {
-            $post_id = isset($params['post_id']) ? (int) $params['post_id'] : 0;
+        $post = $this->resolvePost($params);
 
-            if (!$post_id || !get_post($post_id)) {
-                return ['success' => false, 'message' => 'Post #' . $post_id . ' not found.'];
+        if ($action === 'update') {
+            if (!$post) {
+                $identifier = !empty($params['post_name']) ? '"' . $params['post_name'] . '"' : '#' . ($params['post_id'] ?? 0);
+                return ['success' => false, 'message' => 'Post ' . $identifier . ' not found.'];
             }
 
-            $post_data = ['ID' => $post_id];
+            $label = $this->getPostTypeLabel($post->post_type);
+            $post_data = ['ID' => $post->ID];
             if (isset($params['title'])) $post_data['post_title'] = $params['title'];
             if (isset($params['content'])) $post_data['post_content'] = $params['content'];
             if (isset($params['status'])) $post_data['post_status'] = $params['status'];
@@ -156,29 +183,29 @@ class ManagePostTool extends AbstractAssistantTool
             $result = wp_update_post($post_data, true);
 
             if (is_wp_error($result)) {
-                return ['success' => false, 'message' => 'Failed to update post: ' . $result->get_error_message()];
+                return ['success' => false, 'message' => 'Failed to update ' . strtolower($label) . ': ' . $result->get_error_message()];
             }
 
             return [
                 'success' => true,
-                'message' => 'Post #' . $post_id . ' updated successfully.',
-                'link'    => ['url' => admin_url('post.php?post=' . $post_id . '&action=edit'), 'label' => 'Edit post'],
+                'message' => $label . ' "' . $post->post_title . '" updated successfully.',
+                'link'    => ['url' => admin_url('post.php?post=' . $post->ID . '&action=edit'), 'label' => 'Edit ' . strtolower($label)],
             ];
         }
 
         // trash
-        $post_id = isset($params['post_id']) ? (int) $params['post_id'] : 0;
-
-        if (!$post_id) {
-            return ['success' => false, 'message' => 'post_id is required for trash action.'];
+        if (!$post) {
+            $identifier = !empty($params['post_name']) ? '"' . $params['post_name'] . '"' : '#' . ($params['post_id'] ?? 0);
+            return ['success' => false, 'message' => 'Post ' . $identifier . ' not found.'];
         }
 
-        $result = wp_trash_post($post_id);
+        $label = $this->getPostTypeLabel($post->post_type);
+        $result = wp_trash_post($post->ID);
 
         if (!$result) {
-            return ['success' => false, 'message' => 'Failed to trash post #' . $post_id . '.'];
+            return ['success' => false, 'message' => 'Failed to trash ' . strtolower($label) . ' "' . $post->post_title . '".'];
         }
 
-        return ['success' => true, 'message' => 'Post #' . $post_id . ' moved to trash.'];
+        return ['success' => true, 'message' => $label . ' "' . $post->post_title . '" moved to trash.'];
     }
 }

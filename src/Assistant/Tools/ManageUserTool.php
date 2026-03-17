@@ -18,7 +18,7 @@ class ManageUserTool extends AbstractAssistantTool
 
     public function getDescription(): string
     {
-        return 'Create, update, or delete WordPress users. Can set username, email, display name, role, and password. Use this when the user asks to add team members, change roles, update user profiles, or remove users.';
+        return 'Create, update, or delete WordPress users. Can set username, email, display name, role, and password. For update/delete, you can provide user_id OR username OR email to identify the user — an ID is not required.';
     }
 
     public function getParameterSchema(): array
@@ -27,9 +27,9 @@ class ManageUserTool extends AbstractAssistantTool
             'type'       => 'object',
             'properties' => [
                 'action' => ['type' => 'string', 'enum' => ['create', 'update', 'delete'], 'description' => 'The action to perform on the user.'],
-                'user_id' => ['type' => 'integer', 'description' => 'The user ID (required for update and delete).'],
-                'username' => ['type' => 'string', 'description' => 'The login username (required for create).'],
-                'email' => ['type' => 'string', 'description' => 'The user email address.'],
+                'user_id' => ['type' => 'integer', 'description' => 'The user ID. Optional — if not provided, the user will be looked up by username or email.'],
+                'username' => ['type' => 'string', 'description' => 'The login username. Used for create, or to find an existing user when user_id is not provided.'],
+                'email' => ['type' => 'string', 'description' => 'The user email address. Also used to find an existing user when user_id is not provided.'],
                 'display_name' => ['type' => 'string', 'description' => 'The display name shown publicly.'],
                 'first_name' => ['type' => 'string', 'description' => 'The user first name.'],
                 'last_name' => ['type' => 'string', 'description' => 'The user last name.'],
@@ -39,6 +39,50 @@ class ManageUserTool extends AbstractAssistantTool
             ],
             'required' => ['action'],
         ];
+    }
+
+    /**
+     * Resolve a user by ID, username, or email. Returns WP_User or false.
+     */
+    private function resolveUser(array $params)
+    {
+        if (!empty($params['user_id'])) {
+            return get_userdata((int) $params['user_id']);
+        }
+
+        if (!empty($params['username'])) {
+            $user = get_user_by('login', $params['username']);
+            if ($user) return $user;
+        }
+
+        if (!empty($params['email'])) {
+            $user = get_user_by('email', $params['email']);
+            if ($user) return $user;
+        }
+
+        // Try display name as last resort
+        if (!empty($params['display_name'])) {
+            $users = get_users([
+                'search'         => $params['display_name'],
+                'search_columns' => ['display_name'],
+                'number'         => 1,
+            ]);
+            if (!empty($users)) return $users[0];
+        }
+
+        return false;
+    }
+
+    /**
+     * Describe which identifier was used (for error messages).
+     */
+    private function describeIdentifier(array $params): string
+    {
+        if (!empty($params['user_id'])) return '#' . $params['user_id'];
+        if (!empty($params['username'])) return '"' . $params['username'] . '"';
+        if (!empty($params['email'])) return '"' . $params['email'] . '"';
+        if (!empty($params['display_name'])) return '"' . $params['display_name'] . '"';
+        return '(unknown)';
     }
 
     public function preview(array $params): array
@@ -61,12 +105,11 @@ class ManageUserTool extends AbstractAssistantTool
             ];
         }
 
-        if ($action === 'update') {
-            $user_id = isset($params['user_id']) ? (int) $params['user_id'] : 0;
-            $user    = get_userdata($user_id);
+        $user = $this->resolveUser($params);
 
+        if ($action === 'update') {
             if (!$user) {
-                return ['title' => 'Update user #' . $user_id, 'changes' => [['type' => 'update', 'label' => 'Error', 'from' => '', 'to' => 'User not found']]];
+                return ['title' => 'Update user ' . $this->describeIdentifier($params), 'changes' => [['type' => 'error', 'label' => 'Not found', 'from' => $this->describeIdentifier($params), 'to' => 'Could not find this user']]];
             }
 
             $changes = [];
@@ -81,9 +124,7 @@ class ManageUserTool extends AbstractAssistantTool
         }
 
         // delete
-        $user_id = isset($params['user_id']) ? (int) $params['user_id'] : 0;
-        $user    = get_userdata($user_id);
-        $name    = $user ? $user->display_name : '#' . $user_id;
+        $name = $user ? $user->display_name : $this->describeIdentifier($params);
 
         return [
             'title'   => 'Delete user: ' . $name,
@@ -127,17 +168,18 @@ class ManageUserTool extends AbstractAssistantTool
             ];
         }
 
-        if ($action === 'update') {
-            $user_id = isset($params['user_id']) ? (int) $params['user_id'] : 0;
-            if (!$user_id || !get_userdata($user_id)) return ['success' => false, 'message' => 'User #' . $user_id . ' not found.'];
+        $user = $this->resolveUser($params);
 
-            $user_data = ['ID' => $user_id];
+        if ($action === 'update') {
+            if (!$user) return ['success' => false, 'message' => 'User ' . $this->describeIdentifier($params) . ' not found.'];
+
+            $user_data = ['ID' => $user->ID];
 
             if (isset($params['email'])) {
                 $email = sanitize_email($params['email']);
                 if (!is_email($email)) return ['success' => false, 'message' => 'Invalid email address.'];
                 $existing = email_exists($email);
-                if ($existing && $existing !== $user_id) return ['success' => false, 'message' => 'Email "' . $email . '" is already registered to another user.'];
+                if ($existing && $existing !== $user->ID) return ['success' => false, 'message' => 'Email "' . $email . '" is already registered to another user.'];
                 $user_data['user_email'] = $email;
             }
 
@@ -156,23 +198,21 @@ class ManageUserTool extends AbstractAssistantTool
 
             return [
                 'success' => true,
-                'message' => 'User #' . $user_id . ' updated successfully.',
-                'link'    => ['url' => admin_url('user-edit.php?user_id=' . $user_id), 'label' => 'Edit user'],
+                'message' => 'User "' . $user->display_name . '" updated successfully.',
+                'link'    => ['url' => admin_url('user-edit.php?user_id=' . $user->ID), 'label' => 'Edit user'],
             ];
         }
 
         // delete
-        $user_id = isset($params['user_id']) ? (int) $params['user_id'] : 0;
-        if (!$user_id) return ['success' => false, 'message' => 'user_id is required for delete action.'];
-        if (!get_userdata($user_id)) return ['success' => false, 'message' => 'User #' . $user_id . ' not found.'];
-        if ($user_id === get_current_user_id()) return ['success' => false, 'message' => 'Cannot delete the currently logged-in user.'];
+        if (!$user) return ['success' => false, 'message' => 'User ' . $this->describeIdentifier($params) . ' not found.'];
+        if ($user->ID === get_current_user_id()) return ['success' => false, 'message' => 'Cannot delete the currently logged-in user.'];
 
         require_once ABSPATH . 'wp-admin/includes/user.php';
         $reassign = isset($params['reassign']) ? (int) $params['reassign'] : get_current_user_id();
-        $result = wp_delete_user($user_id, $reassign);
+        $result = wp_delete_user($user->ID, $reassign);
 
-        if (!$result) return ['success' => false, 'message' => 'Failed to delete user #' . $user_id . '.'];
+        if (!$result) return ['success' => false, 'message' => 'Failed to delete user "' . $user->display_name . '".'];
 
-        return ['success' => true, 'message' => 'User #' . $user_id . ' deleted. Posts reassigned to user #' . $reassign . '.'];
+        return ['success' => true, 'message' => 'User "' . $user->display_name . '" deleted. Posts reassigned to user #' . $reassign . '.'];
     }
 }
