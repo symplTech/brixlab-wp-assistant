@@ -14,7 +14,7 @@ class ManageMenuTool extends AbstractAssistantTool
 
     public function getDescription(): string
     {
-        return 'Manage WordPress navigation menus. Actions: "list_menus" to see all menus, "list_items" to see items in a menu (with order numbers and hierarchy), "create" a menu, "update" (rename) a menu, "delete" a menu, "add_items" to a menu, "remove_items" from a menu. For existing menus, provide either menu_id OR menu_name — an ID is not required. Always use list_items before removing items so you can see the structure. For bulk removal, use remove_all (clear entire menu), remove_children_of (remove all descendants of an item), or remove_after (remove all items after a given order position). Menu items can be custom links, pages, posts, or terms — provide object_id OR object_name.';
+        return 'Manage WordPress navigation menus. Actions: "list_menus" to see all menus, "list_items" to see items in a menu (with order numbers and hierarchy), "create" a menu, "update" (rename) a menu, "delete" a menu, "add_items" to a menu, "remove_items" from a menu, "reorder_items" to reposition or nest items. For existing menus, provide either menu_id OR menu_name — an ID is not required. Always use list_items first to see the structure. For bulk removal, use remove_all, remove_children_of, or remove_after. For reordering, provide a reorder array with item_id/item_name, position (1-based), and optionally parent_id (0 for top-level). Menu items can be custom links, pages, posts, or terms — provide object_id OR object_name.';
     }
 
     public function getParameterSchema(): array
@@ -24,8 +24,8 @@ class ManageMenuTool extends AbstractAssistantTool
             'properties' => [
                 'action' => [
                     'type'        => 'string',
-                    'enum'        => ['list_menus', 'list_items', 'create', 'update', 'delete', 'add_items', 'remove_items'],
-                    'description' => 'The action: "list_menus" shows all menus, "list_items" shows items in a menu with hierarchy, others modify menus.',
+                    'enum'        => ['list_menus', 'list_items', 'create', 'update', 'delete', 'add_items', 'remove_items', 'reorder_items'],
+                    'description' => 'The action: "list_menus" shows all menus, "list_items" shows items in a menu with hierarchy, "reorder_items" repositions or nests items, others modify menus.',
                 ],
                 'menu_name' => [
                     'type'        => 'string',
@@ -94,6 +94,31 @@ class ManageMenuTool extends AbstractAssistantTool
                 'remove_after' => [
                     'type'        => 'integer',
                     'description' => 'For "remove_items": remove all items that appear after this menu item ID in the menu order (based on the list_items order numbers).',
+                ],
+                'reorder' => [
+                    'type'        => 'array',
+                    'description' => 'For "reorder_items": array of reorder instructions. Each entry moves one item to a new position and/or parent. Items not mentioned keep their current position. Provide item_id or item_name, a new position (1-based order), and optionally a new parent_id (0 for top-level, or another item ID to nest under).',
+                    'items'       => [
+                        'type'       => 'object',
+                        'properties' => [
+                            'item_id' => [
+                                'type'        => 'integer',
+                                'description' => 'The menu item ID to move.',
+                            ],
+                            'item_name' => [
+                                'type'        => 'string',
+                                'description' => 'The menu item title to move (used if item_id is not provided).',
+                            ],
+                            'position' => [
+                                'type'        => 'integer',
+                                'description' => 'New 1-based position in the menu order.',
+                            ],
+                            'parent_id' => [
+                                'type'        => 'integer',
+                                'description' => 'New parent menu item ID. Use 0 to make it top-level, or another item ID to nest it as a child.',
+                            ],
+                        ],
+                    ],
                 ],
                 'location' => [
                     'type'        => 'string',
@@ -475,6 +500,10 @@ class ManageMenuTool extends AbstractAssistantTool
             return ['title' => 'Add items to ' . $menu_name, 'changes' => $changes];
         }
 
+        if ($action === 'reorder_items') {
+            return $this->previewReorderItems($menu, $params);
+        }
+
         // remove_items
         $menu_name = $menu ? $menu->name : $this->describeMenuIdentifier($params);
         $changes = [];
@@ -492,6 +521,56 @@ class ManageMenuTool extends AbstractAssistantTool
 
         $count = count(array_filter($changes, function ($c) { return $c['type'] === 'delete'; }));
         return ['title' => 'Remove ' . $count . ' item(s) from ' . $menu_name, 'changes' => $changes];
+    }
+
+    /**
+     * Preview for reorder_items.
+     */
+    private function previewReorderItems(?\WP_Term $menu, array $params): array
+    {
+        $menu_name = $menu ? $menu->name : $this->describeMenuIdentifier($params);
+        $reorder = isset($params['reorder']) ? $params['reorder'] : [];
+        $changes = [];
+
+        foreach ($reorder as $instruction) {
+            $item_id = isset($instruction['item_id']) ? (int) $instruction['item_id'] : 0;
+            $item_name_param = isset($instruction['item_name']) ? $instruction['item_name'] : '';
+
+            // Resolve item
+            if (!$item_id && $item_name_param && $menu) {
+                $resolved = $this->resolveItemIdsByName($menu->term_id, [$item_name_param]);
+                $item_id = !empty($resolved) ? $resolved[0] : 0;
+            }
+
+            $item_title = $item_id ? $this->getMenuItemTitle($item_id) : ($item_name_param ?: '(unknown)');
+
+            $details = [];
+            if (isset($instruction['position'])) {
+                $details[] = 'position ' . $instruction['position'];
+            }
+            if (isset($instruction['parent_id'])) {
+                $parent_id = (int) $instruction['parent_id'];
+                if ($parent_id === 0) {
+                    $details[] = 'top-level';
+                } else {
+                    $parent_title = $this->getMenuItemTitle($parent_id);
+                    $details[] = 'nested under "' . $parent_title . '"';
+                }
+            }
+
+            $changes[] = [
+                'type'  => 'update',
+                'label' => $item_title,
+                'from'  => 'current position',
+                'to'    => implode(', ', $details) ?: 'no change',
+            ];
+        }
+
+        if (empty($changes)) {
+            $changes[] = ['type' => 'error', 'label' => 'No instructions', 'from' => '', 'to' => 'No reorder instructions provided'];
+        }
+
+        return ['title' => 'Reorder items in ' . $menu_name, 'changes' => $changes];
     }
 
     // ─── Execute ───
@@ -547,6 +626,7 @@ class ManageMenuTool extends AbstractAssistantTool
         if ($action === 'delete') return $this->executeDelete($menu);
         if ($action === 'add_items') return $this->executeAddItems($menu, $params);
         if ($action === 'remove_items') return $this->executeRemoveItems($menu, $params);
+        if ($action === 'reorder_items') return $this->executeReorderItems($menu, $params);
 
         return ['success' => false, 'message' => 'Unknown action: ' . $action];
     }
@@ -647,6 +727,87 @@ class ManageMenuTool extends AbstractAssistantTool
         return [
             'success' => true,
             'message' => $removed . ' item(s) removed from menu "' . $menu->name . '".',
+            'link'    => ['url' => admin_url('nav-menus.php?action=edit&menu=' . $menu->term_id), 'label' => 'Edit menu'],
+        ];
+    }
+
+    private function executeReorderItems(\WP_Term $menu, array $params): array
+    {
+        $reorder = isset($params['reorder']) ? $params['reorder'] : [];
+        if (empty($reorder)) {
+            return ['success' => false, 'message' => 'No reorder instructions provided.'];
+        }
+
+        $all_items = wp_get_nav_menu_items($menu->term_id, array('post_status' => 'any'));
+        if (!$all_items) {
+            return ['success' => false, 'message' => 'Menu has no items to reorder.'];
+        }
+
+        // Build current order: array of item IDs in menu_order
+        $ordered_ids = array_map(function ($item) { return $item->ID; }, $all_items);
+
+        // Process instructions
+        $moved = 0;
+        foreach ($reorder as $instruction) {
+            $item_id = isset($instruction['item_id']) ? (int) $instruction['item_id'] : 0;
+
+            // Resolve by name
+            if (!$item_id && !empty($instruction['item_name'])) {
+                $resolved = $this->resolveItemIdsByName($menu->term_id, [$instruction['item_name']]);
+                $item_id = !empty($resolved) ? $resolved[0] : 0;
+            }
+
+            if (!$item_id) {
+                continue;
+            }
+
+            // Update parent if specified
+            if (isset($instruction['parent_id'])) {
+                $new_parent = (int) $instruction['parent_id'];
+                update_post_meta($item_id, '_menu_item_menu_item_parent', $new_parent);
+
+                // Also update the post field WordPress uses
+                wp_update_post([
+                    'ID' => $item_id,
+                    'post_parent' => 0, // nav_menu_items don't use post_parent
+                ]);
+
+                // Set the menu_item_parent via the standard method
+                $menu_item_data = [
+                    'menu-item-parent-id' => $new_parent,
+                ];
+                wp_update_nav_menu_item($menu->term_id, $item_id, $menu_item_data);
+            }
+
+            // Update position if specified
+            if (isset($instruction['position'])) {
+                $new_position = (int) $instruction['position'];
+                wp_update_post([
+                    'ID'         => $item_id,
+                    'menu_order' => $new_position,
+                ]);
+            }
+
+            $moved++;
+        }
+
+        // Re-normalize menu_order to prevent gaps (1, 2, 3, ...)
+        $refreshed_items = wp_get_nav_menu_items($menu->term_id, array('post_status' => 'any'));
+        if ($refreshed_items) {
+            foreach ($refreshed_items as $index => $item) {
+                $expected_order = $index + 1;
+                if ((int) $item->menu_order !== $expected_order) {
+                    wp_update_post([
+                        'ID'         => $item->ID,
+                        'menu_order' => $expected_order,
+                    ]);
+                }
+            }
+        }
+
+        return [
+            'success' => true,
+            'message' => $moved . ' item(s) repositioned in menu "' . $menu->name . '".',
             'link'    => ['url' => admin_url('nav-menus.php?action=edit&menu=' . $menu->term_id), 'label' => 'Edit menu'],
         ];
     }
