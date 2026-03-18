@@ -20,12 +20,12 @@ class UpdateOptionTool extends AbstractAssistantTool
 
     public function getName(): string
     {
-        return 'update_option';
+        return 'manage_option';
     }
 
     public function getDescription(): string
     {
-        return 'Update a WordPress site setting. Only a predefined set of safe options can be changed: site title, tagline, timezone, date/time format, permalink structure, posts per page, and default comment status.';
+        return 'Read or update WordPress site settings. Use action "get" to read the current value, "get_all" to see all manageable settings at once, or "update" to change a value. Manageable options: site title (blogname), tagline (blogdescription), timezone, date/time format, permalink structure, posts per page, default comment status.';
     }
 
     public function getParameterSchema(): array
@@ -33,38 +33,89 @@ class UpdateOptionTool extends AbstractAssistantTool
         return [
             'type'       => 'object',
             'properties' => [
+                'action' => [
+                    'type'        => 'string',
+                    'enum'        => ['get', 'get_all', 'update'],
+                    'description' => 'The action: "get" reads one option, "get_all" reads all manageable options, "update" changes an option.',
+                ],
                 'option_name' => [
                     'type'        => 'string',
                     'enum'        => self::ALLOWED_OPTIONS,
-                    'description' => 'The WordPress option name to update.',
+                    'description' => 'The WordPress option name (required for "get" and "update").',
                 ],
                 'value' => [
                     'type'        => 'string',
-                    'description' => 'The new value for the option.',
+                    'description' => 'The new value for the option (required for "update").',
                 ],
             ],
-            'required' => ['option_name', 'value'],
+            'required' => ['action'],
         ];
+    }
+
+    public function isReadOnly(array $params): bool
+    {
+        $action = isset($params['action']) ? $params['action'] : 'update';
+        return in_array($action, ['get', 'get_all'], true);
     }
 
     public function preview(array $params): array
     {
-        $option_name = $params['option_name'];
-        $new_value   = $params['value'];
+        $action = isset($params['action']) ? $params['action'] : 'update';
+
+        if ($action === 'get') {
+            $option_name = isset($params['option_name']) ? $params['option_name'] : '';
+            $current = get_option($option_name, '(not set)');
+            return [
+                'title'   => 'Read setting: ' . $option_name,
+                'changes' => [['type' => 'update', 'label' => $option_name, 'from' => '', 'to' => (string) $current]],
+            ];
+        }
+
+        if ($action === 'get_all') {
+            $changes = [];
+            foreach (self::ALLOWED_OPTIONS as $opt) {
+                $val = get_option($opt, '(not set)');
+                $changes[] = ['type' => 'update', 'label' => $opt, 'from' => '', 'to' => (string) $val];
+            }
+            return ['title' => 'Read all settings', 'changes' => $changes];
+        }
+
+        // update
+        $option_name = isset($params['option_name']) ? $params['option_name'] : '';
+        $new_value   = isset($params['value']) ? $params['value'] : '';
         $current     = get_option($option_name, '');
 
         return [
             'title'   => 'Update ' . $option_name,
-            'changes' => [
-                ['type' => 'update', 'label' => $option_name, 'from' => $current, 'to' => $new_value],
-            ],
+            'changes' => [['type' => 'update', 'label' => $option_name, 'from' => (string) $current, 'to' => $new_value]],
         ];
     }
 
     public function execute(array $params): array
     {
-        $option_name = $params['option_name'];
-        $new_value   = $params['value'];
+        $action = isset($params['action']) ? $params['action'] : 'update';
+
+        if ($action === 'get') {
+            $option_name = isset($params['option_name']) ? $params['option_name'] : '';
+            if (!in_array($option_name, self::ALLOWED_OPTIONS, true)) {
+                return ['success' => false, 'message' => 'Option "' . $option_name . '" is not in the allowlist.'];
+            }
+            $value = get_option($option_name, '');
+            return ['success' => true, 'message' => $option_name . ' = "' . $value . '"'];
+        }
+
+        if ($action === 'get_all') {
+            $lines = [];
+            foreach (self::ALLOWED_OPTIONS as $opt) {
+                $val = get_option($opt, '(not set)');
+                $lines[] = $opt . ': ' . $val;
+            }
+            return ['success' => true, 'message' => "Current settings:\n" . implode("\n", $lines)];
+        }
+
+        // update
+        $option_name = isset($params['option_name']) ? $params['option_name'] : '';
+        $new_value   = isset($params['value']) ? $params['value'] : '';
 
         if (!in_array($option_name, self::ALLOWED_OPTIONS, true)) {
             return ['success' => false, 'message' => 'Option "' . $option_name . '" is not in the allowlist.'];

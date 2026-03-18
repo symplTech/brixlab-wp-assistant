@@ -18,7 +18,7 @@ class ManageUserTool extends AbstractAssistantTool
 
     public function getDescription(): string
     {
-        return 'Create, update, or delete WordPress users. Can set username, email, display name, role, and password. For update/delete, you can provide user_id OR username OR email to identify the user — an ID is not required.';
+        return 'List, create, update, or delete WordPress users. Use "list" to search and discover users before modifying them. For update/delete, provide user_id OR username OR email — an ID is not required.';
     }
 
     public function getParameterSchema(): array
@@ -26,10 +26,13 @@ class ManageUserTool extends AbstractAssistantTool
         return [
             'type'       => 'object',
             'properties' => [
-                'action' => ['type' => 'string', 'enum' => ['create', 'update', 'delete'], 'description' => 'The action to perform on the user.'],
+                'action' => ['type' => 'string', 'enum' => ['list', 'create', 'update', 'delete'], 'description' => 'The action: "list" searches users, "create" adds a new user, "update" modifies existing, "delete" removes.'],
                 'user_id' => ['type' => 'integer', 'description' => 'The user ID. Optional — if not provided, the user will be looked up by username or email.'],
                 'username' => ['type' => 'string', 'description' => 'The login username. Used for create, or to find an existing user when user_id is not provided.'],
                 'email' => ['type' => 'string', 'description' => 'The user email address. Also used to find an existing user when user_id is not provided.'],
+                'search' => ['type' => 'string', 'description' => 'Search keyword for "list" action. Searches in username, email, and display name.'],
+                'role_filter' => ['type' => 'string', 'description' => 'Filter by role for "list" action (e.g. "editor", "subscriber").'],
+                'per_page' => ['type' => 'integer', 'description' => 'Number of results for "list" action (default: 20, max: 50).'],
                 'display_name' => ['type' => 'string', 'description' => 'The display name shown publicly.'],
                 'first_name' => ['type' => 'string', 'description' => 'The user first name.'],
                 'last_name' => ['type' => 'string', 'description' => 'The user last name.'],
@@ -85,9 +88,50 @@ class ManageUserTool extends AbstractAssistantTool
         return '(unknown)';
     }
 
+    public function isReadOnly(array $params): bool
+    {
+        return isset($params['action']) && $params['action'] === 'list';
+    }
+
+    /**
+     * Query users for the list action.
+     */
+    private function queryUsers(array $params): array
+    {
+        $args = [
+            'number'  => min(isset($params['per_page']) ? (int) $params['per_page'] : 20, 50),
+            'orderby' => 'display_name',
+            'order'   => 'ASC',
+        ];
+
+        if (!empty($params['search'])) {
+            $args['search']         = '*' . $params['search'] . '*';
+            $args['search_columns'] = ['user_login', 'user_email', 'display_name'];
+        }
+
+        if (!empty($params['role_filter'])) {
+            $args['role'] = $params['role_filter'];
+        }
+
+        return get_users($args);
+    }
+
     public function preview(array $params): array
     {
         $action = $params['action'];
+
+        if ($action === 'list') {
+            $users = $this->queryUsers($params);
+            $changes = [];
+            foreach ($users as $user) {
+                $roles = implode(', ', $user->roles);
+                $changes[] = ['type' => 'update', 'label' => $user->display_name . ' (ID: ' . $user->ID . ')', 'from' => $roles, 'to' => $user->user_email];
+            }
+            if (empty($changes)) {
+                $changes[] = ['type' => 'update', 'label' => 'No results', 'from' => '', 'to' => 'No matching users found'];
+            }
+            return ['title' => 'Found ' . count($users) . ' user(s)', 'changes' => $changes];
+        }
 
         if ($action === 'create') {
             $username = isset($params['username']) ? $params['username'] : '(no username)';
@@ -128,13 +172,26 @@ class ManageUserTool extends AbstractAssistantTool
 
         return [
             'title'   => 'Delete user: ' . $name,
-            'changes' => [['type' => 'delete', 'label' => 'User', 'from' => $name . ($user ? ' (' . $user->user_email . ')' : ''), 'to' => 'permanently deleted']],
+            'changes' => [['type' => 'delete', 'label' => $name, 'from' => ($user ? $user->user_email . ', ' . implode(', ', $user->roles) : ''), 'to' => 'permanently deleted']],
         ];
     }
 
     public function execute(array $params): array
     {
         $action = $params['action'];
+
+        if ($action === 'list') {
+            $users = $this->queryUsers($params);
+            if (empty($users)) {
+                return ['success' => true, 'message' => 'No matching users found.'];
+            }
+            $lines = [];
+            foreach ($users as $user) {
+                $roles = implode(', ', $user->roles);
+                $lines[] = '- ' . $user->display_name . ' (' . $user->user_login . ', ' . $user->user_email . ', ' . $roles . ', ID: ' . $user->ID . ')';
+            }
+            return ['success' => true, 'message' => 'Found ' . count($users) . " user(s):\n" . implode("\n", $lines)];
+        }
 
         if ($action === 'create') {
             $username = isset($params['username']) ? sanitize_user($params['username']) : '';

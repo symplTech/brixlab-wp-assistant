@@ -276,6 +276,70 @@
   margin-bottom: 0.125em;
 }
 
+.brixlab-assistant-msg__markdown h1,
+.brixlab-assistant-msg__markdown h2,
+.brixlab-assistant-msg__markdown h3,
+.brixlab-assistant-msg__markdown h4 {
+  font-weight: 600;
+  color: #0f172a;
+  margin: 0.75em 0 0.35em;
+  line-height: 1.3;
+}
+
+.brixlab-assistant-msg__markdown h1:first-child,
+.brixlab-assistant-msg__markdown h2:first-child,
+.brixlab-assistant-msg__markdown h3:first-child,
+.brixlab-assistant-msg__markdown h4:first-child {
+  margin-top: 0;
+}
+
+.brixlab-assistant-msg__markdown h1 { font-size: 1.1em; }
+.brixlab-assistant-msg__markdown h2 { font-size: 1em; }
+.brixlab-assistant-msg__markdown h3 { font-size: 0.95em; }
+.brixlab-assistant-msg__markdown h4 { font-size: 0.9em; }
+
+.brixlab-assistant-msg__markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.5em 0;
+  font-size: 0.75rem;
+}
+
+.brixlab-assistant-msg__markdown th,
+.brixlab-assistant-msg__markdown td {
+  padding: 0.375em 0.5em;
+  border: 1px solid #cbd5e1;
+  text-align: start;
+}
+
+.brixlab-assistant-msg__markdown th {
+  background: rgba(0, 0, 0, 0.04);
+  font-weight: 600;
+  color: #334155;
+}
+
+.brixlab-assistant-msg__markdown tr:nth-child(even) td {
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.brixlab-assistant-msg__markdown blockquote {
+  margin: 0.5em 0;
+  padding: 0.375em 0.75em;
+  border-inline-start: 3px solid #a5b4fc;
+  background: rgba(99, 102, 241, 0.04);
+  color: #475569;
+}
+
+.brixlab-assistant-msg__markdown blockquote p {
+  margin: 0;
+}
+
+.brixlab-assistant-msg__markdown hr {
+  border: none;
+  border-top: 1px solid #e2e8f0;
+  margin: 0.75em 0;
+}
+
 .brixlab-assistant-msg__markdown code {
   background: rgba(0, 0, 0, 0.06);
   padding: 0.125em 0.3em;
@@ -346,6 +410,94 @@
 @keyframes brixlab-assistant-typing {
   0%, 60%, 100% { opacity: 0.3; transform: scale(0.8); }
   30% { opacity: 1; transform: scale(1); }
+}
+
+/* ── 4b. Read Step Cards ──────────────────────────────────────── */
+.brixlab-assistant-read-steps {
+  max-width: 85%;
+  margin-bottom: 0.25rem;
+}
+
+.brixlab-assistant-read-steps__toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.625rem;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.5rem;
+  cursor: pointer;
+  font-size: 0.6875rem;
+  color: #64748b;
+  font-family: inherit;
+  transition: all 150ms ease;
+  line-height: 1.4;
+}
+
+.brixlab-assistant-read-steps__toggle:hover {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+  color: #475569;
+}
+
+.brixlab-assistant-read-steps__chevron {
+  flex-shrink: 0;
+  transition: transform 150ms ease;
+}
+
+.brixlab-assistant-read-steps__chevron--open {
+  transform: rotate(90deg);
+}
+
+.brixlab-assistant-read-steps__label {
+  font-weight: 500;
+}
+
+.brixlab-assistant-read-steps__content {
+  margin-top: 0.375rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+
+.brixlab-assistant-read-step {
+  padding: 0.5rem 0.625rem;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.brixlab-assistant-read-step:last-child {
+  border-bottom: none;
+}
+
+.brixlab-assistant-read-step__title {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: #475569;
+  margin-bottom: 0.25rem;
+}
+
+.brixlab-assistant-read-step__data {
+  font-size: 0.6875rem;
+  color: #64748b;
+  background: #f8fafc;
+  padding: 0.375rem 0.5rem;
+  border-radius: 0.375rem;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+  line-height: 1.5;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.brixlab-assistant-read-step__data::-webkit-scrollbar {
+  width: 4px;
+}
+
+.brixlab-assistant-read-step__data::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
 }
 
 /* ── 5. Input Row ────────────────────────────────────────────── */

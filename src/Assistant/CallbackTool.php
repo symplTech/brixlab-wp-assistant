@@ -57,13 +57,17 @@ class CallbackTool extends AbstractAssistantTool
     /** @var callable */
     private $executeCallback;
 
+    /** @var callable|null */
+    private $isReadOnlyCallback;
+
     /**
      * @param array $config {
-     *   @type string   $name        Machine-readable tool name (snake_case).
-     *   @type string   $description Description for the AI model.
-     *   @type array    $parameters  JSON Schema for tool parameters.
-     *   @type callable $preview     function(array $params): array  — returns {title, changes[]}.
-     *   @type callable $execute     function(array $params): array  — returns {success, message, link?}.
+     *   @type string        $name          Machine-readable tool name (snake_case).
+     *   @type string        $description   Description for the AI model.
+     *   @type array         $parameters    JSON Schema for tool parameters.
+     *   @type callable      $preview       function(array $params): array  — returns {title, changes[]}.
+     *   @type callable      $execute       function(array $params): array  — returns {success, message, link?}.
+     *   @type callable|null $is_read_only  function(array $params): bool   — returns true for read-only calls (optional).
      * }
      */
     public function __construct(array $config)
@@ -75,11 +79,12 @@ class CallbackTool extends AbstractAssistantTool
             throw new \InvalidArgumentException('CallbackTool requires callable preview and execute.');
         }
 
-        $this->name            = $config['name'];
-        $this->description     = $config['description'];
-        $this->parameterSchema = $config['parameters'];
-        $this->previewCallback = $config['preview'];
-        $this->executeCallback = $config['execute'];
+        $this->name                = $config['name'];
+        $this->description         = $config['description'];
+        $this->parameterSchema     = $config['parameters'];
+        $this->previewCallback     = $config['preview'];
+        $this->executeCallback     = $config['execute'];
+        $this->isReadOnlyCallback  = isset($config['is_read_only']) && is_callable($config['is_read_only']) ? $config['is_read_only'] : null;
     }
 
     public function getName(): string
@@ -105,5 +110,13 @@ class CallbackTool extends AbstractAssistantTool
     public function execute(array $params): array
     {
         return call_user_func($this->executeCallback, $params);
+    }
+
+    public function isReadOnly(array $params): bool
+    {
+        if ($this->isReadOnlyCallback) {
+            return (bool) call_user_func($this->isReadOnlyCallback, $params);
+        }
+        return false;
     }
 }

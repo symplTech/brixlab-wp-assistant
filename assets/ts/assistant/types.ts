@@ -31,10 +31,18 @@ export interface ToolResult {
   data?: Record<string, unknown>;
 }
 
+export interface ReadStep {
+  toolName: string;
+  action: string;
+  input: Record<string, unknown>;
+  result: string;
+}
+
 export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   toolCall?: ToolCall;
   preview?: ActionPreview;
   toolResult?: ToolResult;
+  readSteps?: ReadStep[];
 }

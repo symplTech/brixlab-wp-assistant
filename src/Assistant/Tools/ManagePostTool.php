@@ -14,7 +14,7 @@ class ManagePostTool extends AbstractAssistantTool
 
     public function getDescription(): string
     {
-        return 'Create, update, or trash a WordPress post or page. Supports setting title, content, status, and post type. For update/trash, you can provide either post_id OR post_name (title) to find the post — an ID is not required.';
+        return 'List, create, update, or trash WordPress posts and pages. Use "list" to search and discover existing content before modifying it. For update/trash, provide either post_id OR post_name (title) — an ID is not required.';
     }
 
     public function getParameterSchema(): array
@@ -24,8 +24,8 @@ class ManagePostTool extends AbstractAssistantTool
             'properties' => [
                 'action' => [
                     'type'        => 'string',
-                    'enum'        => ['create', 'update', 'trash'],
-                    'description' => 'The action to perform on the post.',
+                    'enum'        => ['list', 'create', 'update', 'trash'],
+                    'description' => 'The action: "list" searches posts/pages, "create" makes a new one, "update" modifies existing, "trash" moves to trash.',
                 ],
                 'post_id' => [
                     'type'        => 'integer',
@@ -33,7 +33,7 @@ class ManagePostTool extends AbstractAssistantTool
                 ],
                 'post_name' => [
                     'type'        => 'string',
-                    'description' => 'The title of the post/page to find. Used when post_id is not provided. Searches published posts first, then drafts.',
+                    'description' => 'The title of the post/page to find. Used when post_id is not provided.',
                 ],
                 'title' => [
                     'type'        => 'string',
@@ -45,15 +45,28 @@ class ManagePostTool extends AbstractAssistantTool
                 ],
                 'status' => [
                     'type'        => 'string',
-                    'description' => 'Post status (default: publish).',
+                    'description' => 'Post status. For "list": filter by status (default: any). For "create": initial status (default: publish).',
                 ],
                 'post_type' => [
                     'type'        => 'string',
-                    'description' => 'Post type (default: post). Use "page" for pages.',
+                    'description' => 'Post type. For "list": filter by type (default: any). For "create": the type to create (default: post). Use "page" for pages.',
+                ],
+                'search' => [
+                    'type'        => 'string',
+                    'description' => 'Search keyword for "list" action. Searches in post titles and content.',
+                ],
+                'per_page' => [
+                    'type'        => 'integer',
+                    'description' => 'Number of results to return for "list" action (default: 20, max: 50).',
                 ],
             ],
             'required' => ['action'],
         ];
+    }
+
+    public function isReadOnly(array $params): bool
+    {
+        return isset($params['action']) && $params['action'] === 'list';
     }
 
     private function getPostTypeLabel(string $post_type): string
@@ -92,6 +105,19 @@ class ManagePostTool extends AbstractAssistantTool
     {
         $action = $params['action'];
 
+        if ($action === 'list') {
+            $results = $this->queryPosts($params);
+            $changes = [];
+            foreach ($results as $post) {
+                $label = $this->getPostTypeLabel($post->post_type);
+                $changes[] = ['type' => 'update', 'label' => $label . ' (ID: ' . $post->ID . ')', 'from' => $post->post_status, 'to' => $post->post_title];
+            }
+            if (empty($changes)) {
+                $changes[] = ['type' => 'update', 'label' => 'No results', 'from' => '', 'to' => 'No matching posts found'];
+            }
+            return ['title' => 'Found ' . count($results) . ' result(s)', 'changes' => $changes];
+        }
+
         if ($action === 'create') {
             $title = isset($params['title']) ? $params['title'] : 'Untitled';
             $type_slug = isset($params['post_type']) ? $params['post_type'] : 'post';
@@ -99,7 +125,7 @@ class ManagePostTool extends AbstractAssistantTool
 
             return [
                 'title'   => 'Create ' . strtolower($label) . ': ' . $title,
-                'changes' => [['type' => 'create', 'label' => $label, 'from' => '', 'to' => $title]],
+                'changes' => [['type' => 'create', 'label' => $title, 'from' => '', 'to' => $label . ' (publish)']],
             ];
         }
 
@@ -136,13 +162,48 @@ class ManagePostTool extends AbstractAssistantTool
 
         return [
             'title'   => 'Trash ' . strtolower($label) . ': ' . $title,
-            'changes' => [['type' => 'delete', 'label' => $label, 'from' => $title, 'to' => 'trash']],
+            'changes' => [['type' => 'delete', 'label' => $title, 'from' => $label . ', ' . ($post ? $post->post_status : ''), 'to' => 'trash']],
         ];
+    }
+
+    /**
+     * Query posts for the list action.
+     */
+    private function queryPosts(array $params): array
+    {
+        $args = [
+            'posts_per_page' => min(isset($params['per_page']) ? (int) $params['per_page'] : 20, 50),
+            'no_found_rows'  => true,
+            'orderby'        => 'date',
+            'order'          => 'DESC',
+        ];
+
+        $args['post_type'] = !empty($params['post_type']) ? $params['post_type'] : 'any';
+        $args['post_status'] = !empty($params['status']) ? $params['status'] : ['publish', 'draft', 'pending', 'private'];
+
+        if (!empty($params['search'])) {
+            $args['s'] = $params['search'];
+        }
+
+        return get_posts($args);
     }
 
     public function execute(array $params): array
     {
         $action = $params['action'];
+
+        if ($action === 'list') {
+            $results = $this->queryPosts($params);
+            if (empty($results)) {
+                return ['success' => true, 'message' => 'No matching posts found.'];
+            }
+            $lines = [];
+            foreach ($results as $post) {
+                $label = $this->getPostTypeLabel($post->post_type);
+                $lines[] = '- ' . $post->post_title . ' (ID: ' . $post->ID . ', ' . $label . ', ' . $post->post_status . ')';
+            }
+            return ['success' => true, 'message' => 'Found ' . count($results) . " result(s):\n" . implode("\n", $lines)];
+        }
 
         if ($action === 'create') {
             $post_data = [

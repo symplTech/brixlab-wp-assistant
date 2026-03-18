@@ -7,6 +7,7 @@ type ViewMode = 'closed' | 'popover' | 'fullscreen';
 
 const App: React.FC = () => {
   const [mode, setMode] = useState<ViewMode>('closed');
+  const [inputValue, setInputValue] = useState('');
   const chat = useAssistantChat();
 
   const toggleBubble = useCallback(() => {
@@ -36,6 +37,8 @@ const App: React.FC = () => {
       onAcceptAction={chat.acceptAction}
       onRejectAction={chat.rejectAction}
       isActionPending={chat.isLoading}
+      inputValue={inputValue}
+      onInputChange={setInputValue}
     />
   );
 

@@ -14,7 +14,7 @@ class ManageMenuTool extends AbstractAssistantTool
 
     public function getDescription(): string
     {
-        return 'Manage WordPress navigation menus. Can create, update (rename), delete a menu, add items to a menu, and remove items from a menu. For existing menus, provide either menu_id OR menu_name — an ID is not required. Menu items can be custom links, existing pages, posts, or taxonomy terms (categories, tags). When adding pages/posts/terms, provide either object_id OR object_name — the item will be looked up by title if no ID is given.';
+        return 'Manage WordPress navigation menus. Actions: "list_menus" to see all menus, "list_items" to see items in a menu (with order numbers and hierarchy), "create" a menu, "update" (rename) a menu, "delete" a menu, "add_items" to a menu, "remove_items" from a menu. For existing menus, provide either menu_id OR menu_name — an ID is not required. Always use list_items before removing items so you can see the structure. For bulk removal, use remove_all (clear entire menu), remove_children_of (remove all descendants of an item), or remove_after (remove all items after a given order position). Menu items can be custom links, pages, posts, or terms — provide object_id OR object_name.';
     }
 
     public function getParameterSchema(): array
@@ -24,8 +24,8 @@ class ManageMenuTool extends AbstractAssistantTool
             'properties' => [
                 'action' => [
                     'type'        => 'string',
-                    'enum'        => ['create', 'update', 'delete', 'add_items', 'remove_items'],
-                    'description' => 'The action to perform.',
+                    'enum'        => ['list_menus', 'list_items', 'create', 'update', 'delete', 'add_items', 'remove_items'],
+                    'description' => 'The action: "list_menus" shows all menus, "list_items" shows items in a menu with hierarchy, others modify menus.',
                 ],
                 'menu_name' => [
                     'type'        => 'string',
@@ -83,6 +83,18 @@ class ManageMenuTool extends AbstractAssistantTool
                     'description' => 'Menu item titles to remove (for "remove_items" action). Used when item_ids are not known — matches by title within the menu.',
                     'items'       => ['type' => 'string'],
                 ],
+                'remove_all' => [
+                    'type'        => 'boolean',
+                    'description' => 'For "remove_items": remove ALL items from the menu.',
+                ],
+                'remove_children_of' => [
+                    'type'        => 'integer',
+                    'description' => 'For "remove_items": remove all children (and nested descendants) of this menu item ID.',
+                ],
+                'remove_after' => [
+                    'type'        => 'integer',
+                    'description' => 'For "remove_items": remove all items that appear after this menu item ID in the menu order (based on the list_items order numbers).',
+                ],
                 'location' => [
                     'type'        => 'string',
                     'description' => 'Theme menu location slug to assign the menu to.',
@@ -90,6 +102,12 @@ class ManageMenuTool extends AbstractAssistantTool
             ],
             'required' => ['action'],
         ];
+    }
+
+    public function isReadOnly(array $params): bool
+    {
+        $action = isset($params['action']) ? $params['action'] : '';
+        return in_array($action, ['list_menus', 'list_items'], true);
     }
 
     // ─── Resolvers ───
@@ -141,7 +159,7 @@ class ManageMenuTool extends AbstractAssistantTool
      */
     private function resolveItemIdsByName(int $menu_id, array $names): array
     {
-        $menu_items = wp_get_nav_menu_items($menu_id);
+        $menu_items = wp_get_nav_menu_items($menu_id, array('post_status' => 'any'));
         if (!$menu_items) return [];
 
         $ids = [];
@@ -156,6 +174,110 @@ class ManageMenuTool extends AbstractAssistantTool
         return $ids;
     }
 
+    /**
+     * Get the display title for a nav menu item post.
+     * Nav menu items store their title in post meta, not post_title.
+     */
+    private function getMenuItemTitle(int $item_id): string
+    {
+        $post = get_post($item_id);
+        if (!$post) {
+            return '#' . $item_id;
+        }
+
+        // Try the nav menu item's stored title first
+        if (!empty($post->post_title)) {
+            return $post->post_title;
+        }
+
+        // Use wp_setup_nav_menu_item to populate the title from the linked object
+        $nav_item = wp_setup_nav_menu_item($post);
+        if (!empty($nav_item->title)) {
+            return $nav_item->title;
+        }
+
+        // Last resort: check the linked object directly
+        $object_id = (int) get_post_meta($item_id, '_menu_item_object_id', true);
+        $object_type = get_post_meta($item_id, '_menu_item_type', true);
+
+        if ($object_type === 'post_type' && $object_id) {
+            $linked = get_post($object_id);
+            if ($linked) return $linked->post_title;
+        } elseif ($object_type === 'taxonomy' && $object_id) {
+            $taxonomy = get_post_meta($item_id, '_menu_item_object', true);
+            $term = get_term($object_id, $taxonomy);
+            if ($term && !is_wp_error($term)) return $term->name;
+        }
+
+        return '#' . $item_id;
+    }
+
+    /**
+     * Resolve all item IDs to remove based on the various removal parameters.
+     * Supports: item_ids, item_names, remove_all, remove_children_of, remove_after.
+     */
+    private function resolveRemovalIds(\WP_Term $menu, array $params): array
+    {
+        $all_items = wp_get_nav_menu_items($menu->term_id, array('post_status' => 'any'));
+        if (!$all_items) {
+            return [];
+        }
+
+        // remove_all — every item in the menu
+        if (!empty($params['remove_all'])) {
+            return array_map(function ($item) { return $item->ID; }, $all_items);
+        }
+
+        // remove_children_of — all descendants of a specific item
+        if (!empty($params['remove_children_of'])) {
+            $parent_id = (int) $params['remove_children_of'];
+            return $this->collectDescendants($all_items, $parent_id);
+        }
+
+        // remove_after — all items after a given item in menu_order
+        if (!empty($params['remove_after'])) {
+            $after_id = (int) $params['remove_after'];
+            $found = false;
+            $ids = [];
+            foreach ($all_items as $item) {
+                if ($found) {
+                    $ids[] = $item->ID;
+                }
+                if ($item->ID === $after_id) {
+                    $found = true;
+                }
+            }
+            return $ids;
+        }
+
+        // Standard: item_ids + item_names
+        $ids = [];
+        if (!empty($params['item_ids'])) {
+            $ids = array_map('intval', $params['item_ids']);
+        }
+        if (!empty($params['item_names'])) {
+            $resolved = $this->resolveItemIdsByName($menu->term_id, $params['item_names']);
+            $ids = array_merge($ids, $resolved);
+        }
+
+        return array_unique($ids);
+    }
+
+    /**
+     * Collect all descendant item IDs of a given parent (recursive).
+     */
+    private function collectDescendants(array $all_items, int $parent_id): array
+    {
+        $ids = [];
+        foreach ($all_items as $item) {
+            if ((int) $item->menu_item_parent === $parent_id) {
+                $ids[] = $item->ID;
+                $ids = array_merge($ids, $this->collectDescendants($all_items, $item->ID));
+            }
+        }
+        return $ids;
+    }
+
     private function describeMenuIdentifier(array $params): string
     {
         if (!empty($params['menu_id'])) return '#' . $params['menu_id'];
@@ -165,17 +287,144 @@ class ManageMenuTool extends AbstractAssistantTool
 
     // ─── Preview ───
 
+    /**
+     * Format a single menu item line with order, type, status, and ID.
+     */
+    private function formatItemLine(object $item, int $order, string $indent = ''): string
+    {
+        $type_info = '';
+        if ($item->type === 'post_type') {
+            $type_info = ' [' . ucfirst($item->object) . ']';
+            // Check linked object status
+            $linked = get_post($item->object_id);
+            if ($linked && $linked->post_status !== 'publish') {
+                $type_info .= ' (linked ' . $linked->post_status . ')';
+            }
+        } elseif ($item->type === 'taxonomy') {
+            $type_info = ' [' . ucfirst($item->object) . ']';
+        } elseif ($item->type === 'custom') {
+            $type_info = ' [Custom: ' . $item->url . ']';
+        }
+
+        $status_info = '';
+        $post = get_post($item->ID);
+        if ($post && $post->post_status !== 'publish') {
+            $status_info = ' {' . $post->post_status . '}';
+        }
+
+        return $indent . $order . '. ' . $item->title . $type_info . $status_info . ' (ID: ' . $item->ID . ')';
+    }
+
+    /**
+     * Build a text representation of menu items with hierarchy.
+     * Tracks visited items and appends orphans that the tree walk missed.
+     */
+    private function formatMenuItems(array $items): array
+    {
+        if (empty($items)) {
+            return [];
+        }
+
+        // Build parent → children map
+        $children_map = [];
+        $all_ids = [];
+        foreach ($items as $item) {
+            $parent = (int) $item->menu_item_parent;
+            $children_map[$parent][] = $item;
+            $all_ids[$item->ID] = true;
+        }
+
+        $lines = [];
+        $visited = [];
+        $order = 1;
+
+        // Recursive walk
+        $walk = function (int $parent_id, int $depth) use (&$walk, &$lines, &$visited, &$order, $children_map) {
+            if (!isset($children_map[$parent_id])) {
+                return;
+            }
+            foreach ($children_map[$parent_id] as $item) {
+                if (isset($visited[$item->ID])) {
+                    continue;
+                }
+                $visited[$item->ID] = true;
+                $indent = str_repeat('  ', $depth);
+                $lines[] = $this->formatItemLine($item, $order, $indent);
+                $order++;
+                $walk($item->ID, $depth + 1);
+            }
+        };
+
+        // Start from top-level (parent = 0)
+        $walk(0, 0);
+
+        // Catch items whose parent is not 0 but also not in this menu (orphans)
+        foreach ($items as $item) {
+            if (isset($visited[$item->ID])) {
+                continue;
+            }
+            $parent = (int) $item->menu_item_parent;
+            $label = ($parent > 0 && !isset($all_ids[$parent])) ? '[orphaned] ' : '';
+            $lines[] = $label . $this->formatItemLine($item, $order, '');
+            $order++;
+        }
+
+        return $lines;
+    }
+
     public function preview(array $params): array
     {
         $action = $params['action'];
 
+        if ($action === 'list_menus') {
+            $menus = wp_get_nav_menus();
+            $locations = get_nav_menu_locations();
+            $location_map = [];
+            foreach ($locations as $loc => $menu_id) {
+                $location_map[$menu_id][] = $loc;
+            }
+
+            $changes = [];
+            foreach ($menus as $menu) {
+                $locs = isset($location_map[$menu->term_id]) ? implode(', ', $location_map[$menu->term_id]) : 'none';
+                $item_count = wp_get_nav_menu_items($menu->term_id, array('post_status' => 'any'));
+                $count = $item_count ? count($item_count) : 0;
+                $changes[] = ['type' => 'update', 'label' => $menu->name . ' (ID: ' . $menu->term_id . ')', 'from' => $count . ' items', 'to' => 'location: ' . $locs];
+            }
+            if (empty($changes)) {
+                $changes[] = ['type' => 'update', 'label' => 'No menus', 'from' => '', 'to' => 'No navigation menus found'];
+            }
+            return ['title' => count($menus) . ' menu(s) found', 'changes' => $changes];
+        }
+
+        if ($action === 'list_items') {
+            $menu = $this->resolveMenu($params);
+            if (!$menu) {
+                return ['title' => 'List menu items', 'changes' => [['type' => 'error', 'label' => 'Not found', 'from' => $this->describeMenuIdentifier($params), 'to' => 'Menu not found']]];
+            }
+            $items = wp_get_nav_menu_items($menu->term_id, array('post_status' => 'any'));
+            $changes = [];
+            if ($items) {
+                $lines = $this->formatMenuItems($items);
+                foreach ($lines as $line) {
+                    $changes[] = ['type' => 'update', 'label' => 'Item', 'from' => '', 'to' => $line];
+                }
+            }
+            if (empty($changes)) {
+                $changes[] = ['type' => 'update', 'label' => 'Empty', 'from' => '', 'to' => 'Menu has no items'];
+            }
+            return ['title' => 'Items in ' . $menu->name, 'changes' => $changes];
+        }
+
         if ($action === 'create') {
             $menu_name = isset($params['menu_name']) ? $params['menu_name'] : 'Untitled Menu';
-            $changes   = [['type' => 'create', 'label' => 'Menu', 'from' => '', 'to' => $menu_name]];
+            $changes   = [['type' => 'create', 'label' => $menu_name, 'from' => '', 'to' => 'New menu']];
 
             if (!empty($params['items'])) {
                 foreach ($params['items'] as $item) {
-                    $changes[] = ['type' => 'create', 'label' => 'Menu item', 'from' => '', 'to' => $this->describeItem($item)];
+                    $desc = $this->describeItem($item);
+                    $item_title = isset($item['title']) ? $item['title'] : (isset($item['object_name']) ? $item['object_name'] : $desc);
+                    $changes[] = ['type' => 'create', 'label' => $item_title, 'from' => '', 'to' => $desc];
                 }
             }
 
@@ -194,7 +443,7 @@ class ManageMenuTool extends AbstractAssistantTool
 
             $new_name = !empty($params['new_menu_name']) ? $params['new_menu_name'] : (!empty($params['menu_name']) && $menu && $params['menu_name'] !== $menu->name ? $params['menu_name'] : '');
             if ($new_name) {
-                $changes[] = ['type' => 'update', 'label' => 'Menu name', 'from' => $current_name, 'to' => $new_name];
+                $changes[] = ['type' => 'update', 'label' => $current_name, 'from' => $current_name, 'to' => $new_name];
             }
             if (!empty($params['location'])) {
                 $changes[] = ['type' => 'update', 'label' => 'Theme location', 'from' => '', 'to' => $params['location']];
@@ -207,7 +456,7 @@ class ManageMenuTool extends AbstractAssistantTool
             $name = $menu ? $menu->name : $this->describeMenuIdentifier($params);
             return [
                 'title'   => 'Delete menu: ' . $name,
-                'changes' => [['type' => 'delete', 'label' => 'Menu', 'from' => $name, 'to' => 'deleted']],
+                'changes' => [['type' => 'delete', 'label' => $name, 'from' => $name, 'to' => 'deleted']],
             ];
         }
 
@@ -217,7 +466,9 @@ class ManageMenuTool extends AbstractAssistantTool
 
             if (!empty($params['items'])) {
                 foreach ($params['items'] as $item) {
-                    $changes[] = ['type' => 'create', 'label' => 'Menu item', 'from' => '', 'to' => $this->describeItem($item)];
+                    $desc = $this->describeItem($item);
+                    $item_title = isset($item['title']) ? $item['title'] : (isset($item['object_name']) ? $item['object_name'] : $desc);
+                    $changes[] = ['type' => 'create', 'label' => $item_title, 'from' => '', 'to' => $desc];
                 }
             }
 
@@ -228,36 +479,19 @@ class ManageMenuTool extends AbstractAssistantTool
         $menu_name = $menu ? $menu->name : $this->describeMenuIdentifier($params);
         $changes = [];
 
-        // Resolve by IDs
-        $item_ids = isset($params['item_ids']) ? $params['item_ids'] : [];
-        foreach ($item_ids as $item_id) {
-            $post = get_post((int) $item_id);
-            $label = $post ? $post->post_title : '#' . $item_id;
-            $changes[] = ['type' => 'delete', 'label' => 'Menu item', 'from' => $label, 'to' => 'removed'];
-        }
-
-        // Resolve by names
-        if ($menu && !empty($params['item_names'])) {
-            $resolved_ids = $this->resolveItemIdsByName($menu->term_id, $params['item_names']);
-            foreach ($resolved_ids as $item_id) {
-                $post = get_post($item_id);
-                $label = $post ? $post->post_title : '#' . $item_id;
-                $changes[] = ['type' => 'delete', 'label' => 'Menu item', 'from' => $label, 'to' => 'removed'];
+        if ($menu) {
+            $ids_to_remove = $this->resolveRemovalIds($menu, $params);
+            foreach ($ids_to_remove as $item_id) {
+                $item_title = $this->getMenuItemTitle($item_id);
+                $changes[] = ['type' => 'delete', 'label' => $item_title, 'from' => $item_title, 'to' => 'removed'];
             }
-            // Show names that couldn't be resolved
-            $resolved_titles = [];
-            foreach ($resolved_ids as $rid) {
-                $p = get_post($rid);
-                if ($p) $resolved_titles[] = strtolower($p->post_title);
-            }
-            foreach ($params['item_names'] as $name) {
-                if (!in_array(strtolower($name), $resolved_titles, true)) {
-                    $changes[] = ['type' => 'error', 'label' => 'Not found', 'from' => $name, 'to' => 'Item not found in menu'];
-                }
+            if (empty($ids_to_remove)) {
+                $changes[] = ['type' => 'error', 'label' => 'No matches', 'from' => '', 'to' => 'No matching items found to remove'];
             }
         }
 
-        return ['title' => 'Remove items from ' . $menu_name, 'changes' => $changes];
+        $count = count(array_filter($changes, function ($c) { return $c['type'] === 'delete'; }));
+        return ['title' => 'Remove ' . $count . ' item(s) from ' . $menu_name, 'changes' => $changes];
     }
 
     // ─── Execute ───
@@ -266,13 +500,46 @@ class ManageMenuTool extends AbstractAssistantTool
     {
         $action = $params['action'];
 
+        if ($action === 'list_menus') {
+            $menus = wp_get_nav_menus();
+            if (empty($menus)) {
+                return ['success' => true, 'message' => 'No navigation menus found.'];
+            }
+            $locations = get_nav_menu_locations();
+            $location_map = [];
+            foreach ($locations as $loc => $mid) {
+                $location_map[$mid][] = $loc;
+            }
+            $lines = [];
+            foreach ($menus as $menu) {
+                $items = wp_get_nav_menu_items($menu->term_id, array('post_status' => 'any'));
+                $count = $items ? count($items) : 0;
+                $locs = isset($location_map[$menu->term_id]) ? ' [' . implode(', ', $location_map[$menu->term_id]) . ']' : '';
+                $lines[] = '- ' . $menu->name . ' (ID: ' . $menu->term_id . ', ' . $count . ' items)' . $locs;
+            }
+            return ['success' => true, 'message' => count($menus) . " menu(s):\n" . implode("\n", $lines)];
+        }
+
+        if ($action === 'list_items') {
+            $menu = $this->resolveMenu($params);
+            if (!$menu) {
+                return ['success' => false, 'message' => 'Menu ' . $this->describeMenuIdentifier($params) . ' not found.'];
+            }
+            $items = wp_get_nav_menu_items($menu->term_id, array('post_status' => 'any'));
+            if (!$items) {
+                return ['success' => true, 'message' => 'Menu "' . $menu->name . '" has no items.'];
+            }
+            $lines = $this->formatMenuItems($items);
+            return ['success' => true, 'message' => 'Menu "' . $menu->name . '" (' . count($items) . " items):\n" . implode("\n", $lines)];
+        }
+
         if ($action === 'create') {
             return $this->executeCreate($params);
         }
 
         // All other actions need an existing menu
         $menu = $this->resolveMenu($params);
-        if (!$menu && $action !== 'create') {
+        if (!$menu) {
             return ['success' => false, 'message' => 'Menu ' . $this->describeMenuIdentifier($params) . ' not found.'];
         }
 
@@ -363,14 +630,7 @@ class ManageMenuTool extends AbstractAssistantTool
 
     private function executeRemoveItems(\WP_Term $menu, array $params): array
     {
-        $item_ids = isset($params['item_ids']) ? $params['item_ids'] : [];
-
-        // Also resolve names to IDs
-        if (!empty($params['item_names'])) {
-            $resolved = $this->resolveItemIdsByName($menu->term_id, $params['item_names']);
-            $item_ids = array_merge($item_ids, $resolved);
-        }
-
+        $item_ids = $this->resolveRemovalIds($menu, $params);
         $item_ids = array_unique(array_map('intval', $item_ids));
 
         if (empty($item_ids)) {

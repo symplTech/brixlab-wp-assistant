@@ -67,12 +67,29 @@ abstract class AbstractAssistantTool
 
     /**
      * Execute the tool (side effects).
-     * Called only after the user confirms the preview.
+     * Called only after the user confirms the preview — unless isReadOnly() returns true,
+     * in which case the tool is auto-executed without user confirmation.
      *
      * @param array $params Validated parameters from the AI model.
      * @return array {success: bool, message: string, link?: {url: string, label: string}}
      */
     abstract public function execute(array $params): array;
+
+    /**
+     * Whether the given params represent a read-only (no side effects) call.
+     *
+     * Read-only calls are auto-executed without showing a preview card to the user.
+     * The result is fed back to the AI so it can continue reasoning.
+     *
+     * Override this in your tool to return true for read actions (e.g. "list", "get").
+     *
+     * @param array $params The parameters from the AI model.
+     * @return bool
+     */
+    public function isReadOnly(array $params): bool
+    {
+        return false;
+    }
 
     /**
      * Build the tool definition array sent to the AI model.

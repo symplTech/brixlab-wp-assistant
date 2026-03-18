@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { marked } from 'marked';
 import type { ChatMessage, ToolCall } from '../types';
 import ActionPreviewCard from './ActionPreviewCard';
+import ReadStepCard from './ReadStepCard';
 
 marked.setOptions({ breaks: true, gfm: true });
 
@@ -18,6 +19,8 @@ interface AssistantChatProps {
   onAcceptAction?: (toolCall: ToolCall) => void;
   onRejectAction?: (toolCall: ToolCall) => void;
   isActionPending?: boolean;
+  inputValue?: string;
+  onInputChange?: (value: string) => void;
 }
 
 const AssistantChat: React.FC<AssistantChatProps> = ({
@@ -29,8 +32,12 @@ const AssistantChat: React.FC<AssistantChatProps> = ({
   onAcceptAction,
   onRejectAction,
   isActionPending = false,
+  inputValue,
+  onInputChange,
 }) => {
-  const [input, setInput] = useState('');
+  const [localInput, setLocalInput] = useState('');
+  const input = inputValue !== undefined ? inputValue : localInput;
+  const setInput = onInputChange || setLocalInput;
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -108,11 +115,24 @@ const AssistantChat: React.FC<AssistantChatProps> = ({
         </>
       ) : (
         <div className="brixlab-assistant-chat__messages">
-          {messages.map((msg, i) => (
+          {messages.map((msg, i) => {
+            // Read-only step message — render just the collapsed card
+            if (msg.readSteps && msg.readSteps.length > 0 && !msg.content) {
+              return (
+                <div key={i} className="brixlab-assistant-msg brixlab-assistant-msg--assistant">
+                  <ReadStepCard steps={msg.readSteps} />
+                </div>
+              );
+            }
+
+            return (
             <div
               key={i}
               className={`brixlab-assistant-msg brixlab-assistant-msg--${msg.role}`}
             >
+              {msg.readSteps && msg.readSteps.length > 0 && (
+                <ReadStepCard steps={msg.readSteps} />
+              )}
               {msg.role === 'assistant' ? (
                 <div
                   className="brixlab-assistant-msg__content brixlab-assistant-msg__markdown"
@@ -135,7 +155,8 @@ const AssistantChat: React.FC<AssistantChatProps> = ({
                 />
               )}
             </div>
-          ))}
+            );
+          })}
 
           {isLoading && (
             <div className="brixlab-assistant-msg brixlab-assistant-msg--assistant">
