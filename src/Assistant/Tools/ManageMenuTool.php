@@ -55,8 +55,7 @@ class ManageMenuTool extends AbstractAssistantTool
                             ],
                             'object_type' => [
                                 'type'        => 'string',
-                                'enum'        => ['custom', 'page', 'post', 'category', 'post_tag'],
-                                'description' => 'Type of menu item. Defaults to "custom".',
+                                'description' => 'Type of menu item. Use "custom" for custom links, or any registered post type slug (page, post, product, etc.) or taxonomy slug (category, post_tag, product_cat, etc.). Defaults to "custom".',
                             ],
                             'object_id' => [
                                 'type'        => 'integer',
@@ -830,11 +829,12 @@ class ManageMenuTool extends AbstractAssistantTool
             ];
 
             if ($object_type === 'custom') {
+                // Custom link
                 $menu_item_data['menu-item-type']  = 'custom';
                 $menu_item_data['menu-item-title'] = isset($item['title']) ? $item['title'] : '';
                 $menu_item_data['menu-item-url']   = isset($item['url']) ? $item['url'] : '#';
-            } elseif ($object_type === 'page' || $object_type === 'post') {
-                // Resolve by name if no ID
+            } elseif (post_type_exists($object_type)) {
+                // Any registered post type (page, post, product, etc.)
                 if (!$object_id && $object_name) {
                     $post = $this->resolvePostByName($object_name, $object_type);
                     if ($post) $object_id = $post->ID;
@@ -847,8 +847,8 @@ class ManageMenuTool extends AbstractAssistantTool
                 $menu_item_data['menu-item-object-id']  = $object_id;
                 $menu_item_data['menu-item-title']      = isset($item['title']) ? $item['title'] : $post->post_title;
                 $menu_item_data['menu-item-url']        = get_permalink($object_id);
-            } else {
-                // Taxonomy term — resolve by name if no ID
+            } elseif (taxonomy_exists($object_type)) {
+                // Any registered taxonomy (category, post_tag, product_cat, etc.)
                 if (!$object_id && $object_name) {
                     $term = $this->resolveTermByName($object_name, $object_type);
                     if ($term) $object_id = $term->term_id;
@@ -861,6 +861,9 @@ class ManageMenuTool extends AbstractAssistantTool
                 $menu_item_data['menu-item-object-id']  = $object_id;
                 $menu_item_data['menu-item-title']      = isset($item['title']) ? $item['title'] : $term->name;
                 $menu_item_data['menu-item-url']        = get_term_link($term);
+            } else {
+                // Unknown type — skip
+                continue;
             }
 
             $result = wp_update_nav_menu_item($menu_id, 0, $menu_item_data);
@@ -891,26 +894,30 @@ class ManageMenuTool extends AbstractAssistantTool
             return ($title ?: 'Custom link') . ' (' . $url . ')';
         }
 
-        if ($object_type === 'page' || $object_type === 'post') {
+        if (post_type_exists($object_type)) {
             if (!$object_id && $object_name) {
                 $post = $this->resolvePostByName($object_name, $object_type);
                 if ($post) $object_id = $post->ID;
             }
             $post = $object_id ? get_post($object_id) : null;
             $resolved_title = $title ?: $object_name ?: ($post ? $post->post_title : '#' . $object_id);
-            $type_obj = $post ? get_post_type_object($post->post_type) : null;
+            $type_obj = get_post_type_object($object_type);
             $type_label = $type_obj ? $type_obj->labels->singular_name : ucfirst($object_type);
             return $resolved_title . ' [' . $type_label . ']';
         }
 
-        // Taxonomy
-        if (!$object_id && $object_name) {
-            $term = $this->resolveTermByName($object_name, $object_type);
-            if ($term) $object_id = $term->term_id;
+        if (taxonomy_exists($object_type)) {
+            if (!$object_id && $object_name) {
+                $term = $this->resolveTermByName($object_name, $object_type);
+                if ($term) $object_id = $term->term_id;
+            }
+            $term = $object_id ? get_term($object_id, $object_type) : null;
+            $resolved_title = $title ?: $object_name ?: ($term && !is_wp_error($term) ? $term->name : '#' . $object_id);
+            $tax_obj = get_taxonomy($object_type);
+            $tax_label = $tax_obj ? $tax_obj->labels->singular_name : ucfirst($object_type);
+            return $resolved_title . ' [' . $tax_label . ']';
         }
-        $term = $object_id ? get_term($object_id, $object_type) : null;
-        $resolved_title = $title ?: $object_name ?: ($term && !is_wp_error($term) ? $term->name : '#' . $object_id);
-        $tax_label = $object_type === 'category' ? 'Category' : ($object_type === 'post_tag' ? 'Tag' : ucfirst($object_type));
-        return $resolved_title . ' [' . $tax_label . ']';
+
+        return ($title ?: $object_name ?: '#' . $object_id) . ' [' . $object_type . ']';
     }
 }
