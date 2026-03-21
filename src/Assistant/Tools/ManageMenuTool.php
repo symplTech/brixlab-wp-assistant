@@ -14,7 +14,7 @@ class ManageMenuTool extends AbstractAssistantTool
 
     public function getDescription(): string
     {
-        return 'Manage WordPress navigation menus. Actions: "list_menus" to see all menus, "list_items" to see items in a menu (with order numbers and hierarchy), "create" a menu, "update" (rename) a menu, "delete" a menu, "add_items" to a menu, "remove_items" from a menu, "reorder_items" to reposition or nest items. For existing menus, provide either menu_id OR menu_name — an ID is not required. Always use list_items first to see the structure. For bulk removal, use remove_all, remove_children_of, or remove_after. For reordering, provide a reorder array with item_id/item_name, position (1-based), and optionally parent_id (0 for top-level). Menu items can be custom links, pages, posts, or terms — provide object_id OR object_name.';
+        return 'Manage WordPress navigation menus. Actions: "list_menus" to see all menus, "list_items" to see items (with hierarchy), "create", "update" (rename + assign location), "delete", "add_items" (with nested children support), "remove_items", "replace_items" (remove + add in one step), "reorder_items". Use "replace_items" when the user wants to remove items and add new ones — it combines removal (remove_all, remove_children_of, remove_after, item_ids, item_names) with adding (items array with nested children). This avoids multiple tool calls. For existing menus, provide menu_id OR menu_name. Menu items can be custom links (use url "#" for label-only groupings), pages, posts, products, or any taxonomy term — provide object_id OR object_name.';
     }
 
     public function getParameterSchema(): array
@@ -24,8 +24,8 @@ class ManageMenuTool extends AbstractAssistantTool
             'properties' => [
                 'action' => [
                     'type'        => 'string',
-                    'enum'        => ['list_menus', 'list_items', 'create', 'update', 'delete', 'add_items', 'remove_items', 'reorder_items'],
-                    'description' => 'The action: "list_menus" shows all menus, "list_items" shows items in a menu with hierarchy, "reorder_items" repositions or nests items, others modify menus.',
+                    'enum'        => ['list_menus', 'list_items', 'create', 'update', 'delete', 'add_items', 'remove_items', 'replace_items', 'reorder_items'],
+                    'description' => 'Actions: "list_menus", "list_items" (read), "create", "update", "delete", "add_items", "remove_items", "replace_items" (remove then add in one step), "reorder_items". Use "replace_items" when the user wants to remove some items and add new ones in a single operation — combine any remove parameter (remove_all, remove_children_of, remove_after, item_ids, item_names) with "items" array.',
                 ],
                 'menu_name' => [
                     'type'        => 'string',
@@ -41,7 +41,7 @@ class ManageMenuTool extends AbstractAssistantTool
                 ],
                 'items' => [
                     'type'        => 'array',
-                    'description' => 'Menu items to add (for "add_items" action).',
+                    'description' => 'Menu items to add (for "add_items" or "create"). Each item can have a "children" array for nesting — children are created recursively under their parent. This allows building a full multi-level hierarchy in a single call without knowing item IDs in advance.',
                     'items'       => [
                         'type'       => 'object',
                         'properties' => [
@@ -55,7 +55,7 @@ class ManageMenuTool extends AbstractAssistantTool
                             ],
                             'object_type' => [
                                 'type'        => 'string',
-                                'description' => 'Type of menu item. Use "custom" for custom links, or any registered post type slug (page, post, product, etc.) or taxonomy slug (category, post_tag, product_cat, etc.). Defaults to "custom".',
+                                'description' => 'Type of menu item. Use "custom" for custom links (or label-only groupings with url "#"), or any registered post type slug (page, post, product, etc.) or taxonomy slug (category, post_tag, product_cat, etc.). Defaults to "custom".',
                             ],
                             'object_id' => [
                                 'type'        => 'integer',
@@ -67,7 +67,11 @@ class ManageMenuTool extends AbstractAssistantTool
                             ],
                             'parent_item_id' => [
                                 'type'        => 'integer',
-                                'description' => 'Menu item ID of the parent (for nested/dropdown items).',
+                                'description' => 'Menu item ID of an existing parent. Not needed when using "children" array.',
+                            ],
+                            'children' => [
+                                'type'        => 'array',
+                                'description' => 'Nested child items. Same structure as items — can be nested multiple levels deep. The parent ID is set automatically.',
                             ],
                         ],
                     ],
@@ -444,13 +448,7 @@ class ManageMenuTool extends AbstractAssistantTool
             $menu_name = isset($params['menu_name']) ? $params['menu_name'] : 'Untitled Menu';
             $changes   = [['type' => 'create', 'label' => $menu_name, 'from' => '', 'to' => 'New menu']];
 
-            if (!empty($params['items'])) {
-                foreach ($params['items'] as $item) {
-                    $desc = $this->describeItem($item);
-                    $item_title = isset($item['title']) ? $item['title'] : (isset($item['object_name']) ? $item['object_name'] : $desc);
-                    $changes[] = ['type' => 'create', 'label' => $item_title, 'from' => '', 'to' => $desc];
-                }
-            }
+            $this->collectPreviewChanges(isset($params['items']) ? $params['items'] : [], $changes, 1);
 
             if (!empty($params['location'])) {
                 $changes[] = ['type' => 'update', 'label' => 'Theme location', 'from' => '', 'to' => $params['location']];
@@ -487,16 +485,38 @@ class ManageMenuTool extends AbstractAssistantTool
         if ($action === 'add_items') {
             $menu_name = $menu ? $menu->name : $this->describeMenuIdentifier($params);
             $changes = [];
+            $this->collectPreviewChanges(isset($params['items']) ? $params['items'] : [], $changes, 0);
 
-            if (!empty($params['items'])) {
-                foreach ($params['items'] as $item) {
-                    $desc = $this->describeItem($item);
-                    $item_title = isset($item['title']) ? $item['title'] : (isset($item['object_name']) ? $item['object_name'] : $desc);
-                    $changes[] = ['type' => 'create', 'label' => $item_title, 'from' => '', 'to' => $desc];
+            return ['title' => 'Add ' . count($changes) . ' item(s) to ' . $menu_name, 'changes' => $changes];
+        }
+
+        if ($action === 'replace_items') {
+            $menu_name = $menu ? $menu->name : $this->describeMenuIdentifier($params);
+            $changes = [];
+
+            // Show removals
+            if ($menu) {
+                $ids_to_remove = $this->resolveRemovalIds($menu, $params);
+                $remove_count = count($ids_to_remove);
+                if ($remove_count > 10) {
+                    // Summarize large removals
+                    $changes[] = ['type' => 'delete', 'label' => $remove_count . ' items', 'from' => 'current items', 'to' => 'removed'];
+                } else {
+                    foreach ($ids_to_remove as $item_id) {
+                        $item_title = $this->getMenuItemTitle($item_id);
+                        $changes[] = ['type' => 'delete', 'label' => $item_title, 'from' => $item_title, 'to' => 'removed'];
+                    }
                 }
             }
 
-            return ['title' => 'Add items to ' . $menu_name, 'changes' => $changes];
+            // Show additions
+            $add_changes = [];
+            $this->collectPreviewChanges(isset($params['items']) ? $params['items'] : [], $add_changes, 0);
+            $changes = array_merge($changes, $add_changes);
+
+            $del_count = count(array_filter($changes, function ($c) { return $c['type'] === 'delete'; }));
+            $add_count = count($add_changes);
+            return ['title' => 'Replace items in ' . $menu_name . ' (-' . $del_count . ' +' . $add_count . ')', 'changes' => $changes];
         }
 
         if ($action === 'reorder_items') {
@@ -625,6 +645,7 @@ class ManageMenuTool extends AbstractAssistantTool
         if ($action === 'delete') return $this->executeDelete($menu);
         if ($action === 'add_items') return $this->executeAddItems($menu, $params);
         if ($action === 'remove_items') return $this->executeRemoveItems($menu, $params);
+        if ($action === 'replace_items') return $this->executeReplaceItems($menu, $params);
         if ($action === 'reorder_items') return $this->executeReorderItems($menu, $params);
 
         return ['success' => false, 'message' => 'Unknown action: ' . $action];
@@ -639,7 +660,8 @@ class ManageMenuTool extends AbstractAssistantTool
             return ['success' => false, 'message' => 'Failed to create menu: ' . $menu_id->get_error_message()];
         }
 
-        $added = $this->addItemsToMenu($menu_id, isset($params['items']) ? $params['items'] : []);
+        $created = [];
+        $added = $this->addItemsToMenu($menu_id, isset($params['items']) ? $params['items'] : [], 0, $created);
 
         if (!empty($params['location'])) {
             $this->assignLocation($menu_id, $params['location']);
@@ -698,11 +720,17 @@ class ManageMenuTool extends AbstractAssistantTool
             return ['success' => false, 'message' => 'No items provided to add.'];
         }
 
-        $added = $this->addItemsToMenu($menu->term_id, $items);
+        $created = [];
+        $added = $this->addItemsToMenu($menu->term_id, $items, 0, $created);
+
+        $lines = [];
+        foreach ($created as $c) {
+            $lines[] = '- ' . $c['title'] . ' (ID: ' . $c['item_id'] . ')';
+        }
 
         return [
             'success' => true,
-            'message' => $added . ' item(s) added to menu "' . $menu->name . '".',
+            'message' => $added . ' item(s) added to menu "' . $menu->name . '".' . (!empty($lines) ? "\n" . implode("\n", $lines) : ''),
             'link'    => ['url' => admin_url('nav-menus.php?action=edit&menu=' . $menu->term_id), 'label' => 'Edit menu'],
         ];
     }
@@ -726,6 +754,40 @@ class ManageMenuTool extends AbstractAssistantTool
         return [
             'success' => true,
             'message' => $removed . ' item(s) removed from menu "' . $menu->name . '".',
+            'link'    => ['url' => admin_url('nav-menus.php?action=edit&menu=' . $menu->term_id), 'label' => 'Edit menu'],
+        ];
+    }
+
+    private function executeReplaceItems(\WP_Term $menu, array $params): array
+    {
+        // Step 1: Remove
+        $ids_to_remove = $this->resolveRemovalIds($menu, $params);
+        $removed = 0;
+        foreach (array_unique(array_map('intval', $ids_to_remove)) as $item_id) {
+            if (wp_delete_post($item_id, true)) {
+                $removed++;
+            }
+        }
+
+        // Step 2: Add (with parent_item_id support for nesting under existing items)
+        $parent_id = 0;
+        // If removing children of an item, add new items under that same parent
+        if (!empty($params['remove_children_of'])) {
+            $parent_id = (int) $params['remove_children_of'];
+        }
+
+        $created = [];
+        $items = isset($params['items']) ? $params['items'] : [];
+        $added = $this->addItemsToMenu($menu->term_id, $items, $parent_id, $created);
+
+        $lines = [];
+        foreach ($created as $c) {
+            $lines[] = '- ' . $c['title'] . ' (ID: ' . $c['item_id'] . ')';
+        }
+
+        return [
+            'success' => true,
+            'message' => 'Replaced items in menu "' . $menu->name . '": removed ' . $removed . ', added ' . $added . '.' . (!empty($lines) ? "\n" . implode("\n", $lines) : ''),
             'link'    => ['url' => admin_url('nav-menus.php?action=edit&menu=' . $menu->term_id), 'label' => 'Edit menu'],
         ];
     }
@@ -813,7 +875,16 @@ class ManageMenuTool extends AbstractAssistantTool
 
     // ─── Helpers ───
 
-    private function addItemsToMenu(int $menu_id, array $items): int
+    /**
+     * Add items to a menu, supporting recursive children for multi-level hierarchy.
+     *
+     * @param int   $menu_id   The nav menu term ID.
+     * @param array $items     Items to add (each may have a 'children' array).
+     * @param int   $parent_id Parent menu item ID (0 for top-level).
+     * @param array &$created  Collects created item info for the response.
+     * @return int Number of items added.
+     */
+    private function addItemsToMenu(int $menu_id, array $items, int $parent_id = 0, array &$created = []): int
     {
         $added = 0;
 
@@ -821,20 +892,22 @@ class ManageMenuTool extends AbstractAssistantTool
             $object_type = isset($item['object_type']) ? $item['object_type'] : 'custom';
             $object_id   = isset($item['object_id']) ? (int) $item['object_id'] : 0;
             $object_name = isset($item['object_name']) ? $item['object_name'] : '';
-            $parent_id   = isset($item['parent_item_id']) ? (int) $item['parent_item_id'] : 0;
+
+            // parent_item_id from the item overrides the recursive parent
+            $effective_parent = isset($item['parent_item_id']) ? (int) $item['parent_item_id'] : $parent_id;
 
             $menu_item_data = [
                 'menu-item-status'    => 'publish',
-                'menu-item-parent-id' => $parent_id,
+                'menu-item-parent-id' => $effective_parent,
             ];
 
+            $resolved_title = isset($item['title']) ? $item['title'] : '';
+
             if ($object_type === 'custom') {
-                // Custom link
                 $menu_item_data['menu-item-type']  = 'custom';
-                $menu_item_data['menu-item-title'] = isset($item['title']) ? $item['title'] : '';
+                $menu_item_data['menu-item-title'] = $resolved_title ?: 'Link';
                 $menu_item_data['menu-item-url']   = isset($item['url']) ? $item['url'] : '#';
             } elseif (post_type_exists($object_type)) {
-                // Any registered post type (page, post, product, etc.)
                 if (!$object_id && $object_name) {
                     $post = $this->resolvePostByName($object_name, $object_type);
                     if ($post) $object_id = $post->ID;
@@ -845,10 +918,9 @@ class ManageMenuTool extends AbstractAssistantTool
                 $menu_item_data['menu-item-type']      = 'post_type';
                 $menu_item_data['menu-item-object']     = $post->post_type;
                 $menu_item_data['menu-item-object-id']  = $object_id;
-                $menu_item_data['menu-item-title']      = isset($item['title']) ? $item['title'] : $post->post_title;
+                $menu_item_data['menu-item-title']      = $resolved_title ?: $post->post_title;
                 $menu_item_data['menu-item-url']        = get_permalink($object_id);
             } elseif (taxonomy_exists($object_type)) {
-                // Any registered taxonomy (category, post_tag, product_cat, etc.)
                 if (!$object_id && $object_name) {
                     $term = $this->resolveTermByName($object_name, $object_type);
                     if ($term) $object_id = $term->term_id;
@@ -859,20 +931,48 @@ class ManageMenuTool extends AbstractAssistantTool
                 $menu_item_data['menu-item-type']      = 'taxonomy';
                 $menu_item_data['menu-item-object']     = $object_type;
                 $menu_item_data['menu-item-object-id']  = $object_id;
-                $menu_item_data['menu-item-title']      = isset($item['title']) ? $item['title'] : $term->name;
+                $menu_item_data['menu-item-title']      = $resolved_title ?: $term->name;
                 $menu_item_data['menu-item-url']        = get_term_link($term);
             } else {
-                // Unknown type — skip
                 continue;
             }
 
-            $result = wp_update_nav_menu_item($menu_id, 0, $menu_item_data);
-            if (!is_wp_error($result)) {
-                $added++;
+            $new_item_id = wp_update_nav_menu_item($menu_id, 0, $menu_item_data);
+            if (is_wp_error($new_item_id)) {
+                continue;
+            }
+
+            $added++;
+            $created[] = [
+                'item_id' => $new_item_id,
+                'title'   => $menu_item_data['menu-item-title'],
+                'type'    => $object_type,
+            ];
+
+            // Recursively add children under this new item
+            if (!empty($item['children']) && is_array($item['children'])) {
+                $added += $this->addItemsToMenu($menu_id, $item['children'], $new_item_id, $created);
             }
         }
 
         return $added;
+    }
+
+    /**
+     * Recursively collect preview changes from nested items.
+     */
+    private function collectPreviewChanges(array $items, array &$changes, int $depth): void
+    {
+        foreach ($items as $item) {
+            $desc = $this->describeItem($item);
+            $item_title = isset($item['title']) ? $item['title'] : (isset($item['object_name']) ? $item['object_name'] : $desc);
+            $indent = $depth > 0 ? str_repeat('  ', $depth) : '';
+            $changes[] = ['type' => 'create', 'label' => $indent . $item_title, 'from' => '', 'to' => $desc];
+
+            if (!empty($item['children']) && is_array($item['children'])) {
+                $this->collectPreviewChanges($item['children'], $changes, $depth + 1);
+            }
+        }
     }
 
     private function assignLocation(int $menu_id, string $location): void
