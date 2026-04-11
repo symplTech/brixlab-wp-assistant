@@ -4,10 +4,15 @@ const CopyWebpackPlugin = require('copy-webpack-plugin');
 const ZipPlugin = require('zip-webpack-plugin');
 const TerserPlugin = require('terser-webpack-plugin');
 
+try {
+  require('dotenv').config({ path: path.resolve(__dirname, '.env') });
+} catch (e) {}
+
 const PLUGIN_NAME = 'brixlab-assistant';
 const PLUGIN_VERSION = require('./package.json').version;
 
-function makeCopyPlugin(toDir) {
+function makeCopyPlugin(toDir, { isProduction = false } = {}) {
+  const prodApiBase = (process.env.BRIXLAB_ASSISTANT_API_BASE_PRODUCTION || '').replace(/\/+$/, '');
   return new CopyWebpackPlugin({
     patterns: [
       // Main plugin PHP
@@ -16,6 +21,12 @@ function makeCopyPlugin(toDir) {
         to: path.join(toDir, 'brixlab-assistant.php'),
         transform: (content) => {
           let result = content.toString();
+          if (isProduction && prodApiBase) {
+            result = result.replace(
+              /define\('BRIXLAB_ASSISTANT_API_BASE',\s*defined\('BRIXTE_API_BASE'\)\s*\?\s*BRIXTE_API_BASE\s*:\s*'[^']*'\)/,
+              `define('BRIXLAB_ASSISTANT_API_BASE', defined('BRIXTE_API_BASE') ? BRIXTE_API_BASE : '${prodApiBase}')`
+            );
+          }
           result = result.replace(
             /define\('BRIXLAB_ASSISTANT_VERSION',\s*'[^']*'\)/,
             `define('BRIXLAB_ASSISTANT_VERSION', '${PLUGIN_VERSION}')`
@@ -108,7 +119,7 @@ module.exports = (env = {}, argv = {}) => {
     },
     plugins: [
       new CleanWebpackPlugin(),
-      makeCopyPlugin(PROD_ROOT),
+      makeCopyPlugin(PROD_ROOT, { isProduction: true }),
       new ZipPlugin({
         filename: `${PLUGIN_NAME}.zip`,
         pathPrefix: PLUGIN_NAME,
